@@ -1,10 +1,10 @@
 const CACHE_NAME = 'nibex-v1';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/styles.css',
-  '/manifest.json'
+  './',
+  './index.html',
+  './app.js',
+  './styles.css',
+  './manifest.json'
 ];
 
 // Install — cache static assets
