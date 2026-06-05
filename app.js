@@ -792,6 +792,8 @@ const App = {
         </div>
 
         ${panels}
+
+        <div style="height:100px;flex-shrink:0;"></div>
       </div>
 
       <div class="bottom-bar">
