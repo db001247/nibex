@@ -138,7 +138,7 @@ const SyncEngine = {
         'Authorization': `Bearer ${Auth.token}`,
         'Prefer': 'resolution=merge-duplicates'
       },
-      body: JSON.stringify({ id: sessionId, data, updated_at: new Date().toISOString() })
+      body: JSON.stringify({ id: sessionId, user_id: Auth.user?.id, data, updated_at: new Date().toISOString() })
     });
     if (!response.ok) throw new Error('Cloud sync failed');
     UI.showSyncStatus('online');
