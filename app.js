@@ -140,7 +140,11 @@ const SyncEngine = {
       },
       body: JSON.stringify({ id: sessionId, user_id: Auth.user?.id, data, updated_at: new Date().toISOString() })
     });
-    if (!response.ok) throw new Error('Cloud sync failed');
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Supabase sync failed:', response.status, errorText);
+      throw new Error('Cloud sync failed');
+    }
     UI.showSyncStatus('online');
   },
 
