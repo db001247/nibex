@@ -227,6 +227,7 @@ const Auth = {
       this.token = data.access_token;
       this.user = data.user;
       LocalStore.set('auth_token', data.access_token);
+      LocalStore.set('auth_refresh_token', data.refresh_token);
       LocalStore.set('auth_user', data.user);
       return { success: true };
     }
@@ -239,7 +240,26 @@ const Auth = {
     LocalStore.delete('auth_token');
     LocalStore.delete('auth_user');
   },
-
+  
+  async refresh() {
+  if (!CONFIG.supabaseUrl) return false;
+  try {
+    const response = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': CONFIG.supabaseKey },
+      body: JSON.stringify({ refresh_token: LocalStore.get('auth_refresh_token') })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      this.token = data.access_token;
+      LocalStore.set('auth_token', data.access_token);
+      LocalStore.set('auth_refresh_token', data.refresh_token);
+      return true;
+    }
+  } catch(e) {}
+  return false;
+},
+  
   restore() {
     this.token = LocalStore.get('auth_token');
     this.user = LocalStore.get('auth_user');
