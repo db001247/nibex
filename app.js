@@ -129,8 +129,10 @@ const SyncEngine = {
   },
 
   async pushToCloud(sessionId, data) {
-    if (!CONFIG.supabaseUrl) return;
-    const response = await fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_sessions`, {
+  if (!CONFIG.supabaseUrl) return;
+  
+  const doRequest = async () => {
+    return await fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_sessions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -140,13 +142,28 @@ const SyncEngine = {
       },
       body: JSON.stringify({ id: sessionId, user_id: Auth.user?.id, data, updated_at: new Date().toISOString() })
     });
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Supabase sync failed:', response.status, errorText);
-      throw new Error('Cloud sync failed');
+  };
+
+  let response = await doRequest();
+  
+  if (response.status === 401) {
+    const refreshed = await Auth.refresh();
+    if (refreshed) {
+      response = await doRequest();
+    } else {
+      UI.showSyncStatus('offline');
+      throw new Error('Session expired — please sign in again');
     }
-    UI.showSyncStatus('online');
-  },
+  }
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Supabase sync failed:', response.status, errorText);
+    throw new Error('Cloud sync failed');
+  }
+  
+  UI.showSyncStatus('online');
+},
 
   async load(sessionId) {
     // Try cloud first if online
