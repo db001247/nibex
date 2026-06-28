@@ -317,8 +317,8 @@ const Session = {
 
   getDimensionsForTier(tier) {
     const all = [1,2,3,4,5,6,7,8,9,10,11];
-    const foundations = [6, 8, 9]; // Operations, Customer, Digital
-    const standard = [1, 3, 5, 6, 8, 9, 10]; // + Economic, Revenue, Stakeholders, Strategic
+    const foundations = [1, 3, 5, 6, 8, 9, 10]; // Tier 1 dimensions with surface red flag screen for 2,4,7,11
+    const standard = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]; // All 11 dimensions
     return tier === 'foundations' ? foundations : tier === 'complete' ? all : standard;
   },
 
