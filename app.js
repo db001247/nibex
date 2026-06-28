@@ -2,104 +2,123 @@
 
 // ── Configuration ─────────────────────────────────────────────
 const CONFIG = {
-  supabaseUrl: 'https://ksrrurabddfngnhfoqln.supabase.co',
-  supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtzcnJ1cmFiZGRmbmduaGZvcWxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MjM3MjAsImV4cCI6MjA5NTk5OTcyMH0.qMBCLb1X1FdR8LPjrswxAM6kJNRIeY6gt055-qYynNc',
-  anthropicProxy: '/api/claude', // Server-side proxy for Anthropic API
+  supabaseUrl:   'https://ksrrurabddfngnhfoqln.supabase.co',
+  supabaseKey:   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtzcnJ1cmFiZGRmbmduaGZvcWxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MjM3MjAsImV4cCI6MjA5NTk5OTcyMH0.qMBCLb1X1FdR8LPjrswxAM6kJNRIeY6gt055-qYynNc',
+  anthropicProxy: '/api/claude',
+  // Companies House: proxied via Supabase Edge Function — key never in client code
+  chEdgeFunction: 'https://ksrrurabddfngnhfoqln.supabase.co/functions/v1/companies-house',
 };
+
+// ── Tier definitions ───────────────────────────────────────────
+const TIER_CONFIG = {
+  foundations: {
+    label:       'NIBEX Foundations',
+    scoredDims:  [1, 3, 5, 6, 8, 9, 10],
+    redFlagDims: [2, 4, 7, 11],
+    allDims:     [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    price:       { mvp: 150, standard: 250 },
+    desc:        'Seven core dimensions fully assessed. Partial NIBEX score. Surface-level red flag screen across four compliance dimensions.',
+  },
+  standard: {
+    label:       'NIBEX Standard',
+    scoredDims:  [1,2,3,4,5,6,7,8,9,10,11],
+    redFlagDims: [],
+    allDims:     [1,2,3,4,5,6,7,8,9,10,11],
+    price:       { mvp: 600, standard: 1000 },
+    desc:        'All eleven dimensions fully assessed. Complete uncapped NIBEX score with sector weighting.',
+  },
+  complete: {
+    label:       'NIBEX Complete',
+    scoredDims:  [1,2,3,4,5,6,7,8,9,10,11],
+    redFlagDims: [],
+    allDims:     [1,2,3,4,5,6,7,8,9,10,11],
+    price:       { mvp: 2100, standard: 3500 },
+    desc:        'All eleven dimensions at highest rigour. Pre-assessment research included. Score designed to withstand external scrutiny.',
+  },
+};
+
+// Sub-elements where -1 (Dereliction) is explicitly defined — -1 hidden elsewhere
+const DERELICTION_SUBS = new Set([
+  '1.1','1.3','1.4','1.6','1.7',
+  '2.1','2.2','2.3','2.4','2.5',
+  '4.1','4.2','4.3','4.4','4.5',
+  '5.1','5.2','5.4',
+  '6.1','6.3','6.5','6.9',
+  '7.1','7.2','7.3','7.4','7.5','7.6',
+  '8.3',
+  '9.7',
+  '11.1','11.2','11.3','11.4','11.5','11.6','11.7','11.8','11.9',
+]);
+
+// ── Complexity indicator ───────────────────────────────────────
+const COMPLEXITY_Qs = [
+  { id:'employees', label:'How many people does the business employ?',
+    options:[{l:'Just the owner',w:0},{l:'1–5',w:1},{l:'6–20',w:2},{l:'21–50',w:3},{l:'50+',w:4}] },
+  { id:'locations', label:'How many trading locations?',
+    options:[{l:'Single site',w:0},{l:'2–3 sites',w:2},{l:'4+ sites or multi-region',w:4}] },
+  { id:'regulated', label:'Regulated sector / licences / certifications?',
+    options:[{l:'No',w:0},{l:'One regulated area',w:2},{l:'Multiple regulated areas',w:4}] },
+  { id:'turnover', label:'Approximate annual turnover?',
+    options:[{l:'Under £100k',w:0},{l:'£100k–£500k',w:1},{l:'£500k–£2m',w:2},{l:'£2m+',w:4}] },
+  { id:'finance', label:'External finance or investors?',
+    options:[{l:'None',w:0},{l:"Director's loan or simple debt",w:1},{l:'External investors or complex capital structure',w:3}] },
+];
+
+function complexityRecommendation(answers) {
+  let total = 0;
+  for (const q of COMPLEXITY_Qs) {
+    const idx = answers[q.id];
+    if (idx !== undefined) total += q.options[idx]?.w || 0;
+  }
+  return { score: total, tier: total <= 3 ? 'foundations' : total <= 9 ? 'standard' : 'complete' };
+}
 
 // ── Score metadata ─────────────────────────────────────────────
 const SCORE_META = {
-  '-1': { label: 'Dereliction', desc: 'Active legal jeopardy — the business is in breach of a legal obligation creating risk to customers, employees, investors, or the business itself. A dimension ceiling of 2 is applied until resolved.', chipClass: 'chip-neg', btnClass: 'selected-neg' },
-  '0':  { label: 'Absent', desc: 'Should exist but does not. No active harm but a meaningful gap.', chipClass: 'chip-0', btnClass: 'selected-0' },
-  '1':  { label: 'Minimal', desc: 'Exists in name only. Would not survive scrutiny or pressure.', chipClass: 'chip-1', btnClass: 'selected-1' },
-  '2':  { label: 'Basic', desc: 'A foundation exists but is incomplete, undocumented, or fragile.', chipClass: 'chip-2', btnClass: 'selected-2' },
-  '3':  { label: 'Functional', desc: 'Works adequately for current needs. Identifiable gaps exist but are not critical.', chipClass: 'chip-3', btnClass: 'selected-3' },
-  '4':  { label: 'Developed', desc: 'Well-established and systematic. Holds up under pressure or scrutiny.', chipClass: 'chip-4', btnClass: 'selected-4' },
-  '5':  { label: 'Optimised', desc: 'Best practice for this type and scale of business. Systematic and monitored.', chipClass: 'chip-5', btnClass: 'selected-5' },
-  'na': { label: 'N/A', desc: 'This sub-element genuinely does not apply to this business. Excluded from score calculation.', chipClass: 'chip-na', btnClass: 'selected-na' },
-  'p':  { label: 'Pending', desc: 'Applicable but cannot be scored yet — insufficient information. Shown as a gap in the output.', chipClass: 'chip-pending', btnClass: 'selected-pending' },
+  '-1': { label:'Dereliction', desc:'Active legal jeopardy — the business is in breach of a legal obligation creating risk to customers, employees, investors, or the business itself. A dimension ceiling of 2 is applied until resolved.', chipClass:'chip-neg',     btnClass:'selected-neg' },
+  '0':  { label:'Absent',      desc:'Should exist but does not. No active harm but a meaningful gap.',                                                                                                                              chipClass:'chip-0',       btnClass:'selected-0' },
+  '1':  { label:'Minimal',     desc:'Exists in name only. Would not survive scrutiny or pressure.',                                                                                                                                 chipClass:'chip-1',       btnClass:'selected-1' },
+  '2':  { label:'Basic',       desc:'A foundation exists but is incomplete, undocumented, or fragile.',                                                                                                                             chipClass:'chip-2',       btnClass:'selected-2' },
+  '3':  { label:'Functional',  desc:'Works adequately for current needs. Identifiable gaps exist but are not critical.',                                                                                                            chipClass:'chip-3',       btnClass:'selected-3' },
+  '4':  { label:'Developed',   desc:'Well-established and systematic. Holds up under pressure or scrutiny.',                                                                                                                       chipClass:'chip-4',       btnClass:'selected-4' },
+  '5':  { label:'Optimised',   desc:'Best practice for this type and scale of business. Systematic and monitored.',                                                                                                                chipClass:'chip-5',       btnClass:'selected-5' },
+  'na': { label:'N/A',         desc:'This sub-element genuinely does not apply to this business. Excluded from score calculation.',                                                                                                chipClass:'chip-na',      btnClass:'selected-na' },
+  'p':  { label:'Pending',     desc:'Applicable but cannot be scored yet — insufficient information. Shown as a gap in the output.',                                                                                               chipClass:'chip-pending', btnClass:'selected-pending' },
 };
 
 // ── Offline data store ─────────────────────────────────────────
 const LocalStore = {
   prefix: 'nibex_',
-
-  set(key, value) {
-    try {
-      localStorage.setItem(this.prefix + key, JSON.stringify(value));
-      return true;
-    } catch(e) {
-      console.error('LocalStore.set failed:', e);
-      return false;
-    }
-  },
-
-  get(key) {
-    try {
-      const item = localStorage.getItem(this.prefix + key);
-      return item ? JSON.parse(item) : null;
-    } catch(e) {
-      return null;
-    }
-  },
-
-  delete(key) {
-    localStorage.removeItem(this.prefix + key);
-  },
-
-  // Queue a write for background sync
-  queueSync(operation) {
-    const queue = this.get('sync_queue') || [];
-    queue.push({ ...operation, queuedAt: Date.now() });
-    this.set('sync_queue', queue);
-  },
-
-  getSyncQueue() {
-    return this.get('sync_queue') || [];
-  },
-
-  clearSyncQueue() {
-    this.delete('sync_queue');
-  }
+  set(k,v)  { try { localStorage.setItem(this.prefix+k, JSON.stringify(v)); return true; } catch(e) { console.error('LocalStore.set',e); return false; } },
+  get(k)    { try { const i=localStorage.getItem(this.prefix+k); return i?JSON.parse(i):null; } catch(e) { return null; } },
+  delete(k) { localStorage.removeItem(this.prefix+k); },
+  queueSync(op) { const q=this.get('sync_queue')||[]; q.push({...op,queuedAt:Date.now()}); this.set('sync_queue',q); },
+  getSyncQueue()  { return this.get('sync_queue')||[]; },
+  clearSyncQueue(){ this.delete('sync_queue'); },
 };
 
 // ── Connectivity manager ───────────────────────────────────────
 const Connectivity = {
   isOnline: navigator.onLine,
   listeners: [],
-
   init() {
-    window.addEventListener('online', () => {
-      this.isOnline = true;
-      this.notify();
-      SyncEngine.flush();
-    });
-    window.addEventListener('offline', () => {
-      this.isOnline = false;
-      this.notify();
-    });
-
-    // Service worker sync message
-    navigator.serviceWorker?.addEventListener('message', event => {
-      if (event.data.type === 'SYNC_READY') SyncEngine.flush();
-    });
+    window.addEventListener('online',  () => { this.isOnline=true;  this.notify(); SyncEngine.flush(); });
+    window.addEventListener('offline', () => { this.isOnline=false; this.notify(); });
+    navigator.serviceWorker?.addEventListener('message', e => { if(e.data.type==='SYNC_READY') SyncEngine.flush(); });
   },
-
   onChange(fn) { this.listeners.push(fn); },
-  notify() { this.listeners.forEach(fn => fn(this.isOnline)); }
+  notify()     { this.listeners.forEach(fn => fn(this.isOnline)); },
 };
 
 // ── Sync engine ────────────────────────────────────────────────
 const SyncEngine = {
   async save(sessionId, data) {
-    // Always save locally first
     LocalStore.set(`session_${sessionId}`, data);
-
     if (Connectivity.isOnline && CONFIG.supabaseUrl) {
-      await this.pushToCloud(sessionId, data);
+      try { await this.pushToCloud(sessionId, data); }
+      catch(e) { LocalStore.queueSync({type:'upsert',sessionId,data}); UI.showSyncStatus('offline'); }
     } else {
-      // Queue for later
-      LocalStore.queueSync({ type: 'upsert', sessionId, data });
+      LocalStore.queueSync({type:'upsert',sessionId,data});
       UI.showSyncStatus('offline');
     }
   },
@@ -107,88 +126,59 @@ const SyncEngine = {
   async flush() {
     const queue = LocalStore.getSyncQueue();
     if (!queue.length) return;
-
     UI.showSyncStatus('syncing');
     const failed = [];
-
     for (const op of queue) {
-      try {
-        await this.pushToCloud(op.sessionId, op.data);
-      } catch(e) {
-        failed.push(op);
-      }
+      try { await this.pushToCloud(op.sessionId, op.data); }
+      catch(e) { failed.push(op); }
     }
+    if (failed.length) { LocalStore.set('sync_queue', failed); UI.showSyncStatus('offline'); }
+    else { LocalStore.clearSyncQueue(); UI.showSyncStatus('online'); }
+  },
 
-    if (failed.length) {
-      LocalStore.set('sync_queue', failed);
+  async _fetch(url, opts, retry = true) {
+    // Shared fetch wrapper with 401 retry across all Supabase operations (Bug 3)
+    const authHeaders = () => ({
+      'apikey': CONFIG.supabaseKey,
+      'Authorization': `Bearer ${Auth.token}`,
+    });
+    const resp = await fetch(url, { ...opts, headers: { ...authHeaders(), ...(opts.headers||{}) } });
+    if (resp.status === 401 && retry) {
+      const ok = await Auth.refresh();
+      if (ok) return this._fetch(url, opts, false);
       UI.showSyncStatus('offline');
-    } else {
-      LocalStore.clearSyncQueue();
-      UI.showSyncStatus('online');
+      throw new Error('Session expired');
     }
+    return resp;
   },
 
   async pushToCloud(sessionId, data) {
-  if (!CONFIG.supabaseUrl) return;
-  
-  const doRequest = async () => {
-    return await fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_sessions`, {
+    if (!CONFIG.supabaseUrl) return;
+    UI.showSyncStatus('syncing');
+    const resp = await this._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_sessions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': CONFIG.supabaseKey,
-        'Authorization': `Bearer ${Auth.token}`,
-        'Prefer': 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify({ id: sessionId, user_id: Auth.user?.id, data, updated_at: new Date().toISOString() })
+      headers: { 'Content-Type':'application/json', 'Prefer':'resolution=merge-duplicates' },
+      body: JSON.stringify({ id:sessionId, user_id:Auth.user?.id, data, updated_at:new Date().toISOString() }),
     });
-  };
-
-  let response = await doRequest();
-  
-  if (response.status === 401) {
-    const refreshed = await Auth.refresh();
-    if (refreshed) {
-      response = await doRequest();
-    } else {
-      UI.showSyncStatus('offline');
-      throw new Error('Session expired — please sign in again');
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error('Supabase sync failed:', resp.status, txt);
+      throw new Error('Cloud sync failed');
     }
-  }
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Supabase sync failed:', response.status, errorText);
-    throw new Error('Cloud sync failed');
-  }
-  
-  UI.showSyncStatus('online');
-},
+    UI.showSyncStatus('online');
+  },
 
   async load(sessionId) {
-    // Try cloud first if online
     if (Connectivity.isOnline && CONFIG.supabaseUrl) {
       try {
-        const response = await fetch(
-          `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?id=eq.${sessionId}&select=data`,
-          {
-            headers: {
-              'apikey': CONFIG.supabaseKey,
-              'Authorization': `Bearer ${Auth.token}`
-            }
-          }
+        const resp = await this._fetch(
+          `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?id=eq.${sessionId}&select=data`, {}
         );
-        if (response.ok) {
-          const rows = await response.json();
-          if (rows.length) {
-            const cloudData = rows[0].data;
-            LocalStore.set(`session_${sessionId}`, cloudData);
-            return cloudData;
-          }
+        if (resp.ok) {
+          const rows = await resp.json();
+          if (rows.length) { const d=rows[0].data; LocalStore.set(`session_${sessionId}`,d); return d; }
         }
-      } catch(e) {
-        console.warn('Cloud load failed, falling back to local');
-      }
+      } catch(e) { console.warn('Cloud load failed, falling back to local'); }
     }
     return LocalStore.get(`session_${sessionId}`);
   },
@@ -196,201 +186,249 @@ const SyncEngine = {
   async listSessions() {
     if (Connectivity.isOnline && CONFIG.supabaseUrl) {
       try {
-        const response = await fetch(
-          `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?select=id,data->>business_name,data->>nibex_score,updated_at&order=updated_at.desc`,
-          {
-            headers: {
-              'apikey': CONFIG.supabaseKey,
-              'Authorization': `Bearer ${Auth.token}`
-            }
-          }
+        const resp = await this._fetch(
+          `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?select=id,data->>business_name,data->>nibex_score,data->>tier,updated_at&order=updated_at.desc`, {}
         );
-        if (response.ok) return await response.json();
+        if (resp.ok) return await resp.json();
       } catch(e) {}
     }
-    // Fall back to local sessions
     return Object.keys(localStorage)
       .filter(k => k.startsWith('nibex_session_'))
-      .map(k => {
-        const data = LocalStore.get(k.replace('nibex_', ''));
-        return { id: k.replace('nibex_session_', ''), data };
-      });
-  }
+      .map(k => { const data=LocalStore.get(k.replace('nibex_','')); return {id:k.replace('nibex_session_',''),data}; });
+  },
+
+  async deleteSession(sessionId) {
+    LocalStore.delete(`session_${sessionId}`);
+    if (Connectivity.isOnline && CONFIG.supabaseUrl) {
+      await this._fetch(
+        `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?id=eq.${sessionId}`,
+        { method:'DELETE', headers:{ 'Content-Type':'application/json' } }
+      );
+    }
+  },
 };
 
 // ── Authentication ─────────────────────────────────────────────
 const Auth = {
-  token: null,
-  user: null,
+  token: null, user: null, _email: null,
 
   async signIn(email, password) {
+    this._email = email;
     if (!CONFIG.supabaseUrl) {
-      // Dev mode — skip auth
-      this.token = 'dev';
-      this.user = { email };
-      LocalStore.set('auth_token', 'dev');
-      LocalStore.set('auth_user', { email });
-      return { success: true };
+      this.token='dev'; this.user={email};
+      LocalStore.set('auth_token','dev'); LocalStore.set('auth_user',{email});
+      return {success:true};
     }
-
-    const response = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': CONFIG.supabaseKey },
-      body: JSON.stringify({ email, password })
+    const resp = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=password`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':CONFIG.supabaseKey},
+      body:JSON.stringify({email,password}),
     });
-
-    const data = await response.json();
-    if (response.ok) {
-      this.token = data.access_token;
-      this.user = data.user;
-      LocalStore.set('auth_token', data.access_token);
-      LocalStore.set('auth_refresh_token', data.refresh_token);
-      LocalStore.set('auth_user', data.user);
-      return { success: true };
+    const data = await resp.json();
+    if (resp.ok) {
+      this.token=data.access_token; this.user=data.user;
+      LocalStore.set('auth_token',data.access_token);
+      LocalStore.set('auth_refresh_token',data.refresh_token);
+      LocalStore.set('auth_user',data.user);
+      return {success:true};
     }
-    return { success: false, error: data.error_description || 'Sign in failed' };
+    return {success:false, error:data.error_description||'Sign in failed'};
+  },
+
+  async verifyPassword(password) {
+    // Used by delete confirmation — re-auth with stored email
+    const email = this.user?.email || LocalStore.get('auth_user')?.email;
+    if (!email) return false;
+    const resp = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=password`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':CONFIG.supabaseKey},
+      body:JSON.stringify({email,password}),
+    });
+    return resp.ok;
   },
 
   async signOut() {
-    this.token = null;
-    this.user = null;
-    LocalStore.delete('auth_token');
-    LocalStore.delete('auth_user');
+    this.token=null; this.user=null;
+    LocalStore.delete('auth_token'); LocalStore.delete('auth_user');
+    SessionTimeout.stop();
   },
-  
+
   async refresh() {
-  if (!CONFIG.supabaseUrl) return false;
-  try {
-    const response = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': CONFIG.supabaseKey },
-      body: JSON.stringify({ refresh_token: LocalStore.get('auth_refresh_token') })
-    });
-    if (response.ok) {
-      const data = await response.json();
-      this.token = data.access_token;
-      LocalStore.set('auth_token', data.access_token);
-      LocalStore.set('auth_refresh_token', data.refresh_token);
-      return true;
-    }
-  } catch(e) {}
-  return false;
-},
-  
+    if (!CONFIG.supabaseUrl) return false;
+    try {
+      const resp = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json','apikey':CONFIG.supabaseKey},
+        body:JSON.stringify({refresh_token:LocalStore.get('auth_refresh_token')}),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this.token=data.access_token;
+        LocalStore.set('auth_token',data.access_token);
+        LocalStore.set('auth_refresh_token',data.refresh_token);
+        return true;
+      }
+    } catch(e) {}
+    return false;
+  },
+
   restore() {
     this.token = LocalStore.get('auth_token');
-    this.user = LocalStore.get('auth_user');
+    this.user  = LocalStore.get('auth_user');
     return !!this.token;
-  }
+  },
+};
+
+// ── Session timeout / auto-lock ────────────────────────────────
+const SessionTimeout = {
+  TIMEOUT_MS: 15 * 60 * 1000,
+  _timer: null,
+  _active: false,
+
+  start() {
+    this._active = true;
+    this.reset();
+    ['click','keydown','scroll','touchstart','input'].forEach(ev =>
+      document.addEventListener(ev, () => this.reset(), { passive:true })
+    );
+  },
+
+  stop() {
+    this._active = false;
+    clearTimeout(this._timer);
+  },
+
+  reset() {
+    if (!this._active) return;
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => this.lock(), this.TIMEOUT_MS);
+  },
+
+  lock() {
+    if (!this._active) return;
+    // Save before locking
+    if (Session.id) Session.save();
+    document.getElementById('app').innerHTML = App.renderLockScreen();
+  },
 };
 
 // ── Session state ──────────────────────────────────────────────
 const Session = {
   id: null,
   data: {
-    business_name: '',
-    business_type: '',
-    owner_name: '',
-    tier: 'standard',
-    active_dimensions: [],
-    scores: {},         // { 'dim.sub': score }
-    notes: {},          // { 'dim.sub': string }
-    tasks: {},          // { 'dim.sub': string }
-    evidence_basis: {}, // { 'dim.sub': string }
-    ai_suggestions: {}, // { 'dim.sub': { score, reasoning } }
-    created_at: null,
-    updated_at: null,
-    nibex_score: null,
-    dimension_scores: {}
+    business_name:'', business_type:'', owner_name:'',
+    tier:'standard', active_dimensions:[], red_flag_dims:[],
+    scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
+    ai_suggestions:{}, red_flags:{},
+    complexity_answers:{}, complexity_recommendation:null,
+    companies_house_data:null,
+    upgrade_history:[], foundations_credit_recorded:false,
+    created_at:null, updated_at:null,
+    nibex_score:null, dimension_scores:{},
   },
 
-  new(businessName, tier = 'standard') {
-    this.id = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-    this.data = {
-      ...this.data,
-      business_name: businessName,
-      tier,
-      active_dimensions: this.getDimensionsForTier(tier),
-      created_at: new Date().toISOString(),
+  _defaults() {
+    return {
+      business_name:'', business_type:'', owner_name:'',
+      tier:'standard', active_dimensions:[], red_flag_dims:[],
+      scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
+      ai_suggestions:{}, red_flags:{},
+      complexity_answers:{}, complexity_recommendation:null,
+      companies_house_data:null,
+      upgrade_history:[], foundations_credit_recorded:false,
+      created_at:null, updated_at:null,
+      nibex_score:null, dimension_scores:{},
     };
   },
 
-  getDimensionsForTier(tier) {
-    const all = [1,2,3,4,5,6,7,8,9,10,11];
-    const foundations = [1, 3, 5, 6, 8, 9, 10]; // Tier 1 dimensions with surface red flag screen for 2,4,7,11
-    const standard = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]; // All 11 dimensions
-    return tier === 'foundations' ? foundations : tier === 'complete' ? all : standard;
+  new(businessName, tier, complexityAnswers, complexityRec, chData) {
+    const tc = TIER_CONFIG[tier] || TIER_CONFIG.standard;
+    this.id = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+    this.data = {
+      ...this._defaults(),
+      business_name: businessName,
+      tier,
+      active_dimensions: tc.allDims,
+      red_flag_dims:     tc.redFlagDims,
+      complexity_answers:      complexityAnswers || {},
+      complexity_recommendation: complexityRec || null,
+      companies_house_data:    chData || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  },
+
+  isRedFlagDim(dimId) {
+    return (this.data.red_flag_dims || []).includes(dimId);
   },
 
   setScore(dimId, subId, score) {
-    const key = `${dimId}.${subId}`;
-    this.data.scores[key] = score;
+    this.data.scores[`${dimId}.${subId}`] = score;
     this.data.updated_at = new Date().toISOString();
     this.recalculate();
     this.save();
   },
 
-  setNotes(dimId, subId, text) {
-    this.data.notes[`${dimId}.${subId}`] = text;
+  setNotes(dimId, subId, text)    { this.data.notes[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
+  setTasks(dimId, subId, text)    { this.data.tasks[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
+  setEvidence(dimId, subId, val)  { this.data.evidence_basis[`${dimId}.${subId}`]=val; this.save(); },
+  setEvidenceReviewed(dimId, subId, val) { if(!this.data.evidence_reviewed) this.data.evidence_reviewed={}; this.data.evidence_reviewed[`${dimId}.${subId}`]=val; this.save(); },
+  setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
+
+  setRedFlag(dimId, subId, flagged, notes) {
+    if(!this.data.red_flags) this.data.red_flags={};
+    this.data.red_flags[`${dimId}.${subId}`] = {flagged, notes:notes||''};
     this.data.updated_at = new Date().toISOString();
     this.save();
+    UI.updateTabStatuses();
+    UI.updateNibexBanner();
   },
 
-  setTasks(dimId, subId, text) {
-    this.data.tasks[`${dimId}.${subId}`] = text;
-    this.data.updated_at = new Date().toISOString();
+  upgradeTier(newTier) {
+    const currentTier = this.data.tier;
+    const tierOrder = ['foundations','standard','complete'];
+    if (tierOrder.indexOf(newTier) <= tierOrder.indexOf(currentTier)) return false; // no downgrades
+    const tc = TIER_CONFIG[newTier];
+    const history = this.data.upgrade_history || [];
+    history.push({ from:currentTier, to:newTier, at:new Date().toISOString() });
+    this.data.tier = newTier;
+    this.data.active_dimensions = tc.allDims;
+    this.data.red_flag_dims = tc.redFlagDims;
+    this.data.upgrade_history = history;
+    if (currentTier==='foundations' && newTier==='standard') this.data.foundations_credit_recorded = true;
+    this.recalculate();
     this.save();
-  },
-
-  setEvidence(dimId, subId, basis) {
-    this.data.evidence_basis[`${dimId}.${subId}`] = basis;
-    this.save();
-  },
-
-  setAISuggestion(dimId, subId, suggestion) {
-    this.data.ai_suggestions[`${dimId}.${subId}`] = suggestion;
-    this.save();
+    return true;
   },
 
   recalculate() {
+    const tc = TIER_CONFIG[this.data.tier || 'standard'] || TIER_CONFIG.standard;
+    const scoredDims = tc.scoredDims;
     const dimScores = {};
-    let totalWeightedScore = 0;
-    let totalWeight = 0;
+    let totalWeightedScore=0, totalWeight=0;
 
     for (const dimDef of DIMENSIONS) {
-      if (!this.data.active_dimensions.includes(dimDef.id)) continue;
-
-      let dimTotal = 0;
-      let dimCount = 0;
-      let hasDereliction = false;
-
+      if (!scoredDims.includes(dimDef.id)) continue;
+      let dimTotal=0, dimCount=0, hasDereliction=false;
       for (const sub of dimDef.subElements) {
-        const key = `${dimDef.id}.${sub.id}`;
-        const score = this.data.scores[key];
-        if (score === undefined || score === 'na' || score === 'p') continue;
-        const numeric = score === '-1' ? -1 : Number(score);
-        if (numeric === -1) hasDereliction = true;
-        dimTotal += numeric;
-        dimCount++;
+        const score = this.data.scores[`${dimDef.id}.${sub.id}`];
+        if (score===undefined||score==='na'||score==='p') continue;
+        const n = score==='-1' ? -1 : Number(score);
+        if (n===-1) hasDereliction=true;
+        dimTotal+=n; dimCount++;
       }
-
-      if (dimCount === 0) continue;
-
-      let dimAvg = dimTotal / dimCount;
-      if (hasDereliction && dimAvg > 2) dimAvg = 2; // Apply ceiling
-      dimScores[dimDef.id] = { score: dimAvg, hasDereliction, count: dimCount, total: dimDef.subElements.length };
-
-      const weight = dimDef.weight || 1;
-      totalWeightedScore += dimAvg * weight;
-      totalWeight += weight;
+      if (dimCount===0) continue;
+      let dimAvg = dimTotal/dimCount;
+      if (hasDereliction && dimAvg>2) dimAvg=2;
+      dimScores[dimDef.id] = {score:dimAvg, hasDereliction, count:dimCount, total:dimDef.subElements.length};
+      const w = dimDef.weight||1;
+      totalWeightedScore += dimAvg*w;
+      totalWeight += w;
     }
-
     this.data.dimension_scores = dimScores;
-
-    if (totalWeight > 0) {
-      const rawScore = totalWeightedScore / totalWeight;
-      // Normalise from -1..5 range to 0..100
-      this.data.nibex_score = Math.round(((rawScore + 1) / 6) * 100);
+    if (totalWeight>0) {
+      const raw = totalWeightedScore/totalWeight;
+      this.data.nibex_score = Math.round(((raw+1)/6)*100);
     }
   },
 
@@ -402,92 +440,88 @@ const Session = {
 
   async load(sessionId) {
     const data = await SyncEngine.load(sessionId);
-    if (data) {
-      this.id = sessionId;
-      this.data = data;
-      return true;
-    }
-    return false;
+    if (!data) return false;
+    this.id = sessionId;
+    // Backwards compatibility: missing fields default gracefully
+    if (!data.tier) data.tier='standard';
+    const tc = TIER_CONFIG[data.tier] || TIER_CONFIG.standard;
+    if (!data.active_dimensions?.length) data.active_dimensions = tc.allDims;
+    if (!data.red_flag_dims)   data.red_flag_dims   = tc.redFlagDims;
+    if (!data.red_flags)       data.red_flags        = {};
+    if (!data.evidence_reviewed) data.evidence_reviewed = {};
+    if (!data.complexity_answers) data.complexity_answers = {};
+    if (!data.upgrade_history)   data.upgrade_history = [];
+    this.data = data;
+    return true;
   },
 
   getTabStatus(dimId) {
-    const dimDef = DIMENSIONS.find(d => d.id === dimId);
+    const dimDef = DIMENSIONS.find(d=>d.id===dimId);
     if (!dimDef) return 'not-started';
-
-    let hasDereliction = false;
-    let scored = 0;
-    let total = dimDef.subElements.length;
-
-    for (const sub of dimDef.subElements) {
-      const key = `${dimId}.${sub.id}`;
-      const score = this.data.scores[key];
-      if (score !== undefined) {
-        scored++;
-        if (score === '-1') hasDereliction = true;
-      }
+    if (this.isRedFlagDim(dimId)) {
+      const anyFlagged   = dimDef.subElements.some(s => this.data.red_flags[`${dimId}.${s.id}`]?.flagged);
+      const anyRecorded  = dimDef.subElements.some(s => this.data.red_flags[`${dimId}.${s.id}`] !== undefined);
+      if (anyFlagged)  return 'derelict';
+      if (anyRecorded) return 'complete';
+      return 'not-started';
     }
-
+    let hasDereliction=false, scored=0;
+    const total = dimDef.subElements.length;
+    for (const sub of dimDef.subElements) {
+      const score = this.data.scores[`${dimId}.${sub.id}`];
+      if (score!==undefined) { scored++; if(score==='-1') hasDereliction=true; }
+    }
     if (hasDereliction) return 'derelict';
-    if (scored === 0) return 'not-started';
-    if (scored < total) return 'in-progress';
+    if (scored===0) return 'not-started';
+    if (scored<total) return 'in-progress';
     return 'complete';
-  }
+  },
 };
 
 // ── AI scoring ─────────────────────────────────────────────────
 const AIScoring = {
   async suggest(dimId, subId, notes, scoringCriteria, question) {
-    const sub = DIMENSIONS.find(d => d.id === dimId)?.subElements.find(s => s.id === subId);
+    const sub = DIMENSIONS.find(d=>d.id===dimId)?.subElements.find(s=>s.id===subId);
     if (!sub) return null;
-
-    const prompt = `You are an expert business assessor using the NIBEX (Nicomachea Business Index) framework.
-
-Assess the following sub-element and suggest a score based on the assessor's notes.
-
+    const prompt = `You are an expert business assessor using the NIBEX framework.
 SUB-ELEMENT: ${sub.label}
-DIMENSION: ${DIMENSIONS.find(d => d.id === dimId)?.label}
-
-SCORING SCALE:
--1 = Dereliction — active legal jeopardy or legal breach
-0 = Absent — should exist but does not
-1 = Minimal — exists in name only
-2 = Basic — foundation exists but fragile
-3 = Functional — works for current needs, gaps exist
-4 = Developed — systematic, holds under pressure
-5 = Optimised — best practice for type and scale
-N/A = Not applicable to this business
-Pending = Cannot assess with available information
-
-SCORING CRITERIA FOR THIS SUB-ELEMENT:
-${scoringCriteria}
-
-ASSESSOR'S NOTES:
-${notes}
-
-Respond ONLY with valid JSON in this exact format:
-{"score": "-1|0|1|2|3|4|5|na|p", "reasoning": "One to two sentences explaining the suggested score based on the notes provided."}`;
-
+DIMENSION: ${DIMENSIONS.find(d=>d.id===dimId)?.label}
+SCORING SCALE: -1=Dereliction, 0=Absent, 1=Minimal, 2=Basic, 3=Functional, 4=Developed, 5=Optimised, na=N/A, p=Pending
+SCORING CRITERIA: ${scoringCriteria}
+ASSESSOR NOTES: ${notes}
+Respond ONLY with JSON: {"score":"-1|0|1|2|3|4|5|na|p","reasoning":"1-2 sentences"}`;
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
-          messages: [{ role: 'user', content: prompt }]
-        })
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:300,messages:[{role:'user',content:prompt}]}),
       });
+      if (!r.ok) throw new Error('API error');
+      const d = await r.json();
+      return JSON.parse((d.content?.[0]?.text||'').replace(/```json|```/g,'').trim());
+    } catch(e) { console.error('AI scoring failed:',e); return null; }
+  },
+};
 
-      if (!response.ok) throw new Error('API error');
-      const data = await response.json();
-      const text = data.content?.[0]?.text || '';
-      const cleaned = text.replace(/```json|```/g, '').trim();
-      return JSON.parse(cleaned);
-    } catch(e) {
-      console.error('AI scoring failed:', e);
-      return null;
-    }
-  }
+// ── Companies House proxy ──────────────────────────────────────
+const CH = {
+  async search(query) {
+    if (!query?.trim()) return null;
+    try {
+      const r = await fetch(`${CONFIG.chEdgeFunction}/search?q=${encodeURIComponent(query)}`, {
+        headers:{ 'Authorization':`Bearer ${Auth.token}`, 'apikey':CONFIG.supabaseKey },
+      });
+      return r.ok ? await r.json() : null;
+    } catch(e) { return null; }
+  },
+  async getCompany(number) {
+    try {
+      const r = await fetch(`${CONFIG.chEdgeFunction}/company/${number}`, {
+        headers:{ 'Authorization':`Bearer ${Auth.token}`, 'apikey':CONFIG.supabaseKey },
+      });
+      return r.ok ? await r.json() : null;
+    } catch(e) { return null; }
+  },
 };
 
 // ── UI ─────────────────────────────────────────────────────────
@@ -497,85 +531,89 @@ const UI = {
   showSyncStatus(status) {
     const el = document.getElementById('sync-status');
     if (!el) return;
-    el.className = 'sync-indicator sync-' + status;
-    el.innerHTML = status === 'online' ? '● Synced' : status === 'offline' ? '● Offline' : '↻ Syncing';
+    el.className = `sync-indicator sync-${status}`;
+    el.innerHTML = status==='online' ? '● Synced' : status==='offline' ? '● Offline' : '↻ Syncing…';
   },
 
   updateNibexBanner() {
     const scoreEl = document.getElementById('nibex-score');
     if (!scoreEl) return;
-    const score = Session.data.nibex_score;
-    scoreEl.textContent = score !== null ? score : '—';
+    scoreEl.textContent = Session.data.nibex_score !== null ? Session.data.nibex_score : '—';
 
-    // Check for any derelictions
+    const tc = TIER_CONFIG[Session.data.tier||'standard'] || TIER_CONFIG.standard;
+    const labelEl = document.getElementById('nibex-tier-label');
+    if (labelEl) labelEl.textContent = `${tc.label} Score`;
+
+    const dimNoteEl = document.getElementById('nibex-dim-note');
+    if (dimNoteEl) {
+      if (Session.data.tier==='foundations') {
+        dimNoteEl.textContent = `(${tc.scoredDims.length} of 11 dimensions assessed)`;
+        dimNoteEl.style.display='block';
+      } else {
+        dimNoteEl.style.display='none';
+      }
+    }
+
+    const rfBanner = document.getElementById('red-flag-banner');
+    if (rfBanner) {
+      const anyFlags = (Session.data.red_flag_dims||[]).some(dimId => {
+        const d = DIMENSIONS.find(x=>x.id===dimId);
+        return d?.subElements.some(s => Session.data.red_flags?.[`${dimId}.${s.id}`]?.flagged);
+      });
+      rfBanner.style.display = (Session.data.tier==='foundations' && anyFlags) ? 'flex' : 'none';
+    }
+
     const hasDerelictions = Object.values(Session.data.scores).includes('-1');
-    const ceilingWarn = document.getElementById('ceiling-warning');
-    if (ceilingWarn) ceilingWarn.style.display = hasDerelictions ? 'flex' : 'none';
+    const cw = document.getElementById('ceiling-warning');
+    if (cw) cw.style.display = hasDerelictions ? 'flex' : 'none';
   },
 
   updateTabStatuses() {
-    const tabs = document.querySelectorAll('.tab[data-dim]');
-    tabs.forEach(tab => {
+    document.querySelectorAll('.tab[data-dim]').forEach(tab => {
       const dimId = parseInt(tab.dataset.dim);
       const status = Session.getTabStatus(dimId);
       const dot = tab.querySelector('.tab-status');
-      if (dot) {
-        dot.className = 'tab-status ' + status;
-      }
-      // Update count
-      const dimDef = DIMENSIONS.find(d => d.id === dimId);
+      if (dot) dot.className = `tab-status ${status}`;
+      const dimDef = DIMENSIONS.find(d=>d.id===dimId);
       if (dimDef) {
-        const scored = dimDef.subElements.filter(s =>
-          Session.data.scores[`${dimId}.${s.id}`] !== undefined
-        ).length;
         const countEl = tab.querySelector('.tab-count');
-        if (countEl) countEl.textContent = `${scored}/${dimDef.subElements.length}`;
+        if (countEl) {
+          if (Session.isRedFlagDim(dimId)) {
+            const recorded = dimDef.subElements.filter(s => Session.data.red_flags?.[`${dimId}.${s.id}`] !== undefined).length;
+            countEl.textContent = `${recorded}/${dimDef.subElements.length} screened`;
+          } else {
+            const scored = dimDef.subElements.filter(s => Session.data.scores[`${dimId}.${s.id}`] !== undefined).length;
+            countEl.textContent = `${scored}/${dimDef.subElements.length}`;
+          }
+        }
       }
     });
   },
 
   switchTab(dimId) {
-    // Hide all panels
-    document.querySelectorAll('.dimension-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-
-    // Show selected
+    document.querySelectorAll('.dimension-panel').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     const panel = document.getElementById(`dim-panel-${dimId}`);
-    const tab = document.querySelector(`.tab[data-dim="${dimId}"]`);
+    const tab   = document.querySelector(`.tab[data-dim="${dimId}"]`);
     if (panel) panel.classList.add('active');
-    if (tab) {
-      tab.classList.add('active');
-      tab.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-    }
-
+    if (tab)   { tab.classList.add('active'); tab.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'}); }
     this.currentDim = dimId;
     LocalStore.set('last_tab', dimId);
-
-    // Restore open sub-element for this dimension
     const lastOpen = LocalStore.get(`open_sub_${dimId}`);
-    if (lastOpen) {
-      const sub = document.getElementById(`sub-${dimId}-${lastOpen}`);
-      if (sub) this.openSubElement(sub);
-    }
+    if (lastOpen) { const sub=document.getElementById(`sub-${dimId}-${lastOpen}`); if(sub) this.openSubElement(sub); }
   },
 
-  openSubElement(subEl) {
-    subEl.classList.add('open');
-    const ta = subEl.querySelector('textarea');
-    if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+  openSubElement(el) {
+    el.classList.add('open');
+    el.querySelectorAll('textarea').forEach(ta => { ta.style.height='auto'; ta.style.height=ta.scrollHeight+'px'; });
   },
 
-  toggleSubElement(subEl) {
-    const isOpen = subEl.classList.contains('open');
-    // Close all others in this dimension
-    const panel = subEl.closest('.dimension-panel');
-    panel?.querySelectorAll('.sub-element.open').forEach(s => s.classList.remove('open'));
-
+  toggleSubElement(el) {
+    const isOpen = el.classList.contains('open');
+    el.closest('.dimension-panel')?.querySelectorAll('.sub-element.open').forEach(s=>s.classList.remove('open'));
     if (!isOpen) {
-      this.openSubElement(subEl);
-      const subId = subEl.dataset.sub;
-      const dimId = subEl.dataset.dim;
-      LocalStore.set(`open_sub_${dimId}`, subId);
+      this.openSubElement(el);
+      LocalStore.set(`open_sub_${el.dataset.dim}`, el.dataset.sub);
     } else {
       LocalStore.delete(`open_sub_${this.currentDim}`);
     }
@@ -584,228 +622,320 @@ const UI = {
   renderScoreChip(score) {
     const meta = SCORE_META[String(score)];
     if (!meta) return '<span class="sub-element-score-chip chip-empty">—</span>';
-    const label = score === 'na' ? 'N/A' : score === 'p' ? 'P' : score;
+    const label = score==='na'?'N/A': score==='p'?'P': score;
     return `<span class="sub-element-score-chip ${meta.chipClass}">${label}</span>`;
   },
 
+  renderRedFlagChip(dimId, subId) {
+    const f = Session.data.red_flags?.[`${dimId}.${subId}`];
+    if (!f) return '<span class="sub-element-score-chip chip-empty">—</span>';
+    return f.flagged
+      ? '<span class="sub-element-score-chip chip-neg">⚑ Flag</span>'
+      : '<span class="sub-element-score-chip chip-3">✓ Clear</span>';
+  },
+
   selectScore(dimId, subId, score, btnEl) {
-    // Update button states
     const row = btnEl.closest('.score-buttons');
-    row.querySelectorAll('.score-btn').forEach(b => {
-      b.className = 'score-btn';
-    });
+    row.querySelectorAll('.score-btn').forEach(b => b.className='score-btn');
     const meta = SCORE_META[String(score)];
     if (meta) btnEl.classList.add(meta.btnClass);
-
-    // Show descriptor
     const descriptor = btnEl.closest('.score-section').querySelector('.score-descriptor');
     if (descriptor && meta) {
       descriptor.textContent = `${meta.label} — ${meta.desc}`;
-      descriptor.className = `score-descriptor visible ${meta.btnClass.replace('selected-', 'desc-')}`;
-      // Apply colour to descriptor
-      if (score === '-1') descriptor.style.background = 'var(--score-neg-bg)';
-      else if (score === '5') descriptor.style.background = 'var(--score-max-bg)';
-      else if (score === '4') descriptor.style.background = 'var(--score-high-bg)';
-      else if (score === '3') descriptor.style.background = 'var(--score-mid-bg)';
-      else descriptor.style.background = 'var(--surface-raised)';
+      descriptor.className   = `score-descriptor visible ${meta.btnClass.replace('selected-','desc-')}`;
+      descriptor.style.background =
+        score==='-1' ? 'var(--score-neg-bg)' :
+        score==='5'  ? 'var(--score-max-bg)' :
+        score==='4'  ? 'var(--score-high-bg)' :
+        score==='3'  ? 'var(--score-mid-bg)' : 'var(--surface-raised)';
     }
-
-    // Update header chip
     const subEl = document.getElementById(`sub-${dimId}-${subId}`);
     const chipSlot = subEl?.querySelector('.chip-slot');
     if (chipSlot) chipSlot.innerHTML = this.renderScoreChip(score);
-
-    // Apply dereliction class
-    if (subEl) {
-      subEl.classList.toggle('derelict', score === '-1');
-    }
-
-    // Save
+    if (subEl) subEl.classList.toggle('derelict', score==='-1');
     Session.setScore(dimId, subId, score);
+    this.updateDimensionProgress(dimId);
+  },
 
-    // Update dimension progress
+  setRedFlag(dimId, subId, flagged) {
+    const notesEl = document.getElementById(`rf-notes-${dimId}-${subId}`);
+    const notes = notesEl?.value || '';
+    Session.setRedFlag(dimId, subId, flagged, notes);
+    const subEl = document.getElementById(`sub-${dimId}-${subId}`);
+    const chipSlot = subEl?.querySelector('.chip-slot');
+    if (chipSlot) chipSlot.innerHTML = this.renderRedFlagChip(dimId, subId);
+    subEl?.querySelector('.rf-btn-clear')?.classList.toggle('rf-active-clear', !flagged);
+    subEl?.querySelector('.rf-btn-flag')?.classList.toggle('rf-active-flag', flagged);
     this.updateDimensionProgress(dimId);
   },
 
   updateDimensionProgress(dimId) {
-    const dimDef = DIMENSIONS.find(d => d.id === dimId);
+    const dimDef = DIMENSIONS.find(d=>d.id===dimId);
     if (!dimDef) return;
     const total = dimDef.subElements.length;
-    const scored = dimDef.subElements.filter(s =>
-      Session.data.scores[`${dimId}.${s.id}`] !== undefined
-    ).length;
-    const pct = total ? Math.round((scored / total) * 100) : 0;
+    let scored, label;
+    if (Session.isRedFlagDim(dimId)) {
+      scored = dimDef.subElements.filter(s => Session.data.red_flags?.[`${dimId}.${s.id}`] !== undefined).length;
+      label  = `${scored} of ${total} screened`;
+    } else {
+      scored = dimDef.subElements.filter(s => Session.data.scores[`${dimId}.${s.id}`] !== undefined).length;
+      label  = `${scored} of ${total} scored`;
+    }
+    const pct = total ? Math.round(scored/total*100) : 0;
     const fill = document.getElementById(`progress-fill-${dimId}`);
-    const label = document.getElementById(`progress-label-${dimId}`);
-    if (fill) fill.style.width = pct + '%';
-    if (label) label.textContent = `${scored} of ${total} scored`;
+    const lbl  = document.getElementById(`progress-label-${dimId}`);
+    if (fill) fill.style.width = pct+'%';
+    if (lbl)  lbl.textContent  = label;
   },
 
   async requestAIScore(dimId, subId, btnEl) {
-    const sub = DIMENSIONS.find(d => d.id === dimId)?.subElements.find(s => s.id === subId);
+    const sub = DIMENSIONS.find(d=>d.id===dimId)?.subElements.find(s=>s.id===subId);
     if (!sub) return;
-
-    const notesEl = document.getElementById(`notes-${dimId}-${subId}`);
-    const notes = notesEl?.value?.trim();
-
-    if (!notes || notes.length < 20) {
-      alert('Please add some notes about this sub-element before requesting an AI score. The AI needs context to make a useful suggestion.');
-      return;
-    }
-
-    const loadingEl = document.getElementById(`ai-loading-${dimId}-${subId}`);
+    const notes = document.getElementById(`notes-${dimId}-${subId}`)?.value?.trim();
+    if (!notes || notes.length<20) { alert('Add some notes before requesting an AI score.'); return; }
+    const loadingEl    = document.getElementById(`ai-loading-${dimId}-${subId}`);
     const suggestionEl = document.getElementById(`ai-suggestion-${dimId}-${subId}`);
     if (loadingEl) loadingEl.classList.add('visible');
     if (suggestionEl) suggestionEl.classList.remove('visible');
     btnEl.disabled = true;
-
-    const result = await AIScoring.suggest(dimId, subId, notes, sub.scoringCriteria || '', sub.question || '');
-
+    const result = await AIScoring.suggest(dimId, subId, notes, sub.scoringCriteria||'', sub.question||'');
     if (loadingEl) loadingEl.classList.remove('visible');
     btnEl.disabled = false;
-
     if (result) {
       Session.setAISuggestion(dimId, subId, result);
       const meta = SCORE_META[result.score];
-      const scoreLabel = meta ? `${result.score} — ${meta.label}` : result.score;
-
-      const suggestedScoreEl = document.getElementById(`ai-suggested-score-${dimId}-${subId}`);
-      const reasoningEl = document.getElementById(`ai-reasoning-${dimId}-${subId}`);
-
-      if (suggestedScoreEl) suggestedScoreEl.textContent = `Suggested: ${scoreLabel}`;
-      if (reasoningEl) reasoningEl.textContent = result.reasoning;
+      document.getElementById(`ai-suggested-score-${dimId}-${subId}`)?.textContent && (document.getElementById(`ai-suggested-score-${dimId}-${subId}`).textContent=`Suggested: ${result.score}${meta?` — ${meta.label}`:''}`);
+      const re = document.getElementById(`ai-reasoning-${dimId}-${subId}`);
+      if (re) re.textContent = result.reasoning;
       if (suggestionEl) suggestionEl.classList.add('visible');
-    } else {
-      alert('AI scoring is not available right now. Please score manually.');
-    }
+    } else { alert('AI scoring not available. Please score manually.'); }
   },
 
   acceptAIScore(dimId, subId) {
     const suggestion = Session.data.ai_suggestions[`${dimId}.${subId}`];
     if (!suggestion) return;
-
-    const scoreSection = document.querySelector(`#sub-${dimId}-${subId} .score-section`);
-    const btn = scoreSection?.querySelector(`.score-btn[data-score="${suggestion.score}"]`);
-    if (btn) {
-      this.selectScore(dimId, subId, suggestion.score, btn);
-    }
-
-    // Mark evidence as AI-assisted
+    const btn = document.querySelector(`#sub-${dimId}-${subId} .score-btn[data-score="${suggestion.score}"]`);
+    if (btn) this.selectScore(dimId, subId, suggestion.score, btn);
     Session.setEvidence(dimId, subId, 'AI-assisted — assessor confirmed');
-    const evidenceSelect = document.getElementById(`evidence-${dimId}-${subId}`);
-    if (evidenceSelect) evidenceSelect.value = 'AI-assisted — assessor confirmed';
-  }
+    const sel = document.getElementById(`evidence-${dimId}-${subId}`);
+    if (sel) sel.value = 'AI-assisted — assessor confirmed';
+  },
 };
 
 // ── App router ─────────────────────────────────────────────────
 const App = {
-  async init() {
-    // Register service worker
-    if ('serviceWorker' in navigator) {
-      try {
-        await navigator.serviceWorker.register('./sw.js');
-      } catch(e) {
-        console.warn('SW registration failed:', e);
-      }
-    }
+  // Transient new-session flow state
+  _flow: { answers:{}, rec:null, chData:null, tier:null },
 
+  async init() {
+    if ('serviceWorker' in navigator) {
+      try { await navigator.serviceWorker.register('./sw.js'); }
+      catch(e) { console.warn('SW failed:', e); }
+    }
     Connectivity.init();
     Connectivity.onChange(online => UI.showSyncStatus(online ? 'online' : 'offline'));
-
-    const isAuthed = Auth.restore();
-    if (!isAuthed) {
-      this.showAuth();
-    } else {
-      this.showSessionPicker();
-    }
+    Auth.restore() ? this.showSessionPicker() : this.showAuth();
   },
 
-  showAuth() {
-    document.getElementById('app').innerHTML = this.renderAuth();
-  },
+  showAuth() { document.getElementById('app').innerHTML = this._renderAuth(); },
 
   async handleSignIn(e) {
     e.preventDefault();
     const email = document.getElementById('auth-email').value;
-    const password = document.getElementById('auth-password').value;
-    const errorEl = document.getElementById('auth-error');
-    const btn = document.getElementById('auth-btn');
-
-    btn.textContent = 'Signing in...';
-    btn.disabled = true;
-
-    const result = await Auth.signIn(email, password);
-
-    if (result.success) {
-      App.showSessionPicker();
-    } else {
-      errorEl.textContent = result.error;
-      errorEl.style.display = 'block';
-      btn.textContent = 'Sign in';
-      btn.disabled = false;
-    }
+    const pass  = document.getElementById('auth-password').value;
+    const errEl = document.getElementById('auth-error');
+    const btn   = document.getElementById('auth-btn');
+    btn.textContent='Signing in…'; btn.disabled=true;
+    const result = await Auth.signIn(email, pass);
+    if (result.success) { this.showSessionPicker(); }
+    else { errEl.textContent=result.error; errEl.style.display='block'; btn.textContent='Sign in'; btn.disabled=false; }
   },
 
   async showSessionPicker() {
     const sessions = await SyncEngine.listSessions();
-    document.getElementById('app').innerHTML = this.renderSessionPicker(sessions);
+    document.getElementById('app').innerHTML = this._renderSessionPicker(sessions);
   },
 
   showAssessment(sessionId) {
-    Session.load(sessionId).then(() => {
-      this.renderAssessment();
-    });
+    // Bug 1 fix: always navigate to the specified session, clearing last_tab state
+    LocalStore.delete('last_tab');
+    Session.load(sessionId).then(() => this._renderAssessment());
   },
 
-  newSession() {
-    const name = prompt('Business name:');
-    if (!name?.trim()) return;
-    Session.new(name.trim());
-    this.renderAssessment();
+  // ── New session flow ───────────────────────────────────────────
+  startNewSession() {
+    this._flow = { answers:{}, rec:null, chData:null, tier:null };
+    document.getElementById('app').innerHTML = this._renderComplexityScreen();
   },
 
-  renderAssessment() {
-    document.getElementById('app').innerHTML = this.buildAssessmentHTML();
+  async handleCHSearch() {
+    const q = document.getElementById('ch-query')?.value?.trim();
+    if (!q) return;
+    document.getElementById('ch-status').textContent = 'Searching…';
+    const results = await CH.search(q);
+    if (!results?.items?.length) {
+      document.getElementById('ch-status').textContent = 'No results found. Continue without Companies House data.';
+      return;
+    }
+    document.getElementById('ch-status').textContent = '';
+    document.getElementById('ch-results').innerHTML = results.items.slice(0,4).map(c => `
+      <div class="ch-result" onclick="App.selectCHCompany('${c.company_number}', '${(c.title||'').replace(/'/g,"\\'")}', this)">
+        <strong>${c.title}</strong> <span>${c.company_number}</span>
+        <span class="ch-status-badge">${c.company_status||''}</span>
+        <span class="ch-address">${c.address_snippet||''}</span>
+      </div>`).join('');
+  },
 
-    // Restore last active tab
+  async selectCHCompany(number, name, el) {
+    document.querySelectorAll('.ch-result').forEach(r=>r.classList.remove('selected'));
+    el.classList.add('selected');
+    document.getElementById('ch-status').textContent = 'Loading company data…';
+    const data = await CH.getCompany(number);
+    this._flow.chData = data;
+    document.getElementById('ch-status').textContent = data ? `✓ ${name} data loaded.` : 'Could not load full profile — continuing without.';
+  },
+
+  handleComplexityAnswer(qId, optIdx) {
+    this._flow.answers[qId] = optIdx;
+    document.querySelectorAll(`.cq-opt[data-q="${qId}"]`).forEach(b=>b.classList.remove('cq-selected'));
+    document.querySelector(`.cq-opt[data-q="${qId}"][data-i="${optIdx}"]`)?.classList.add('cq-selected');
+    if (Object.keys(this._flow.answers).length === COMPLEXITY_Qs.length) {
+      this._flow.rec = complexityRecommendation(this._flow.answers);
+      const tc = TIER_CONFIG[this._flow.rec.tier];
+      const recEl = document.getElementById('complexity-rec');
+      if (recEl) {
+        recEl.innerHTML = `<div class="rec-box"><span class="rec-label">Recommended</span><strong>${tc.label}</strong><p>${tc.desc}</p></div>`;
+        recEl.style.display='block';
+      }
+      document.getElementById('cq-continue')?.removeAttribute('disabled');
+    }
+  },
+
+  showTierSelection() {
+    document.getElementById('app').innerHTML = this._renderTierSelection();
+  },
+
+  selectTier(tier) {
+    this._flow.tier = tier;
+    document.querySelectorAll('.tier-card').forEach(c=>c.classList.remove('tier-selected'));
+    document.querySelector(`.tier-card[data-tier="${tier}"]`)?.classList.add('tier-selected');
+    document.getElementById('tier-confirm')?.removeAttribute('disabled');
+  },
+
+  showBusinessNameEntry() {
+    document.getElementById('app').innerHTML = this._renderNameEntry();
+  },
+
+  createSession() {
+    const name = document.getElementById('biz-name')?.value?.trim();
+    if (!name) { alert('Please enter the business name.'); return; }
+    const tier = this._flow.tier || 'standard';
+    Session.new(name, tier, this._flow.answers, this._flow.rec, this._flow.chData);
+    this._renderAssessment();
+    // Bug 1 fix: immediately save so new session is in the list
+    Session.save();
+  },
+
+  // ── Upgrade tier ───────────────────────────────────────────────
+  upgradeTier(newTier) {
+    if (!confirm(`Upgrade this session to ${TIER_CONFIG[newTier].label}? This cannot be reversed.`)) return;
+    const ok = Session.upgradeTier(newTier);
+    if (!ok) { alert('Downgrading is not permitted.'); return; }
+    // Navigate to first newly-unlocked dimension
+    const newDim = Session.data.tier==='standard' ? 2 : 1;
+    this._renderAssessment();
+    UI.switchTab(newDim);
+  },
+
+  // ── Delete session ─────────────────────────────────────────────
+  async confirmDeleteSession(sessionId, businessName) {
+    if (!confirm(`Are you sure you want to permanently delete the assessment for ${businessName}? This cannot be undone.`)) return;
+    const pass = prompt('Enter your password to confirm deletion:');
+    if (!pass) return;
+    const verified = await Auth.verifyPassword(pass);
+    if (!verified) { alert('Incorrect password. Deletion cancelled.'); return; }
+    await SyncEngine.deleteSession(sessionId);
+    this.showSessionPicker();
+  },
+
+  // ── Lock screen ────────────────────────────────────────────────
+  renderLockScreen() {
+    return `
+      <div class="auth-screen">
+        <div class="auth-card">
+          <div class="auth-brand">NIBEX <span>Session locked</span></div>
+          <p class="auth-title" style="color:var(--ink-muted);font-size:13px;margin-bottom:16px">
+            This session was locked after 15 minutes of inactivity. Enter your password to continue.
+          </p>
+          <div class="field-group">
+            <label class="field-label">Password</label>
+            <input type="password" id="lock-password" autocomplete="current-password" style="width:100%;padding:10px 12px">
+          </div>
+          <div id="lock-error" style="color:var(--score-neg);font-size:13px;margin-top:8px;display:none"></div>
+          <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="App.unlockSession()">Resume session</button>
+        </div>
+      </div>`;
+  },
+
+  async unlockSession() {
+    const pass = document.getElementById('lock-password')?.value;
+    if (!pass) return;
+    const verified = await Auth.verifyPassword(pass);
+    if (!verified) {
+      const err = document.getElementById('lock-error');
+      if (err) { err.textContent='Incorrect password.'; err.style.display='block'; }
+      return;
+    }
+    SessionTimeout.reset();
+    this._renderAssessment();
+  },
+
+  // ── Assessment render ──────────────────────────────────────────
+  _renderAssessment() {
+    document.getElementById('app').innerHTML = this._buildAssessmentHTML();
     const lastTab = LocalStore.get('last_tab');
     const firstDim = Session.data.active_dimensions[0];
-    UI.switchTab(lastTab && Session.data.active_dimensions.includes(lastTab) ? lastTab : firstDim);
-
+    UI.switchTab(
+      (lastTab && Session.data.active_dimensions.includes(lastTab)) ? lastTab : firstDim
+    );
     UI.updateNibexBanner();
     UI.updateTabStatuses();
-
-    // Init auto-resize on all textareas
     document.querySelectorAll('textarea').forEach(ta => {
-      ta.addEventListener('input', function() {
-        this.style.height = 'auto';
-        this.style.height = this.scrollHeight + 'px';
-      });
+      ta.addEventListener('input', function() { this.style.height='auto'; this.style.height=this.scrollHeight+'px'; });
     });
-
     UI.showSyncStatus(Connectivity.isOnline ? 'online' : 'offline');
+    SessionTimeout.start();
   },
 
-  buildAssessmentHTML() {
-    const activeDims = Session.data.active_dimensions.map(id => DIMENSIONS.find(d => d.id === id)).filter(Boolean);
+  _buildAssessmentHTML() {
+    const tier = Session.data.tier || 'standard';
+    const tc = TIER_CONFIG[tier] || TIER_CONFIG.standard;
+    const allDims = Session.data.active_dimensions.map(id => DIMENSIONS.find(d=>d.id===id)).filter(Boolean);
 
-    const tabs = activeDims.map(dim => `
-      <div class="tab" data-dim="${dim.id}" onclick="UI.switchTab(${dim.id})">
-        <span class="tab-num">${dim.id}</span>
-        <span>${dim.shortLabel}</span>
-        <div class="tab-status not-started"></div>
-        <span class="tab-count" style="font-size:11px;color:var(--ink-faint)">0/${dim.subElements.length}</span>
-      </div>
-    `).join('');
+    const tabs = allDims.map(dim => {
+      const isRF = Session.isRedFlagDim(dim.id);
+      return `
+        <div class="tab${isRF?' tab-redflag':''}" data-dim="${dim.id}" onclick="UI.switchTab(${dim.id})">
+          <span class="tab-num">${dim.id}</span>
+          <span>${dim.shortLabel}${isRF?' <em style="font-size:9px;color:var(--gold)">RF</em>':''}</span>
+          <div class="tab-status not-started"></div>
+          <span class="tab-count" style="font-size:11px;color:var(--ink-faint)">0/${dim.subElements.length}</span>
+        </div>`;
+    }).join('');
 
-    const panels = activeDims.map(dim => this.buildDimensionPanel(dim)).join('');
+    const panels = allDims.map(dim => this._buildDimensionPanel(dim)).join('');
+
+    // Upgrade button — Foundations → Standard, Standard → Complete
+    let upgradeBtn = '';
+    if (tier === 'foundations') {
+      upgradeBtn = `<button class="btn btn-secondary upgrade-btn" onclick="App.upgradeTier('standard')">Upgrade to Standard →</button>`;
+    } else if (tier === 'standard') {
+      upgradeBtn = `<button class="btn btn-secondary upgrade-btn" onclick="App.upgradeTier('complete')">Upgrade to Complete →</button>`;
+    }
 
     return `
       <div class="toolbar">
-        <div class="toolbar-brand">
-          NIBEX
-          <span>Nicomachea Business Assessment</span>
-        </div>
+        <div class="toolbar-brand">NIBEX <span>Nicomachea Business Assessment</span></div>
         <div class="toolbar-meta">
           <div id="sync-status" class="sync-indicator sync-offline">● Offline</div>
         </div>
@@ -816,75 +946,148 @@ const App = {
       <div class="main">
         <div class="nibex-banner">
           <div>
-            <div class="nibex-score-label">NIBEX Score</div>
+            <div class="nibex-score-label" id="nibex-tier-label">${tc.label} Score</div>
             <div class="nibex-score-display">
               <span class="nibex-score-number" id="nibex-score">—</span>
               <span class="nibex-score-denom">/100</span>
             </div>
+            <div id="nibex-dim-note" style="font-size:11px;color:var(--ink-muted);margin-top:2px;display:${tier==='foundations'?'block':'none'}">
+              (${tc.scoredDims.length} of 11 dimensions assessed)
+            </div>
           </div>
-          <div>
-            <div class="nibex-score-label" style="text-align:right">${Session.data.business_name}</div>
-            <div class="nibex-tier-badge">${Session.data.tier}</div>
+          <div style="text-align:right">
+            <div class="nibex-score-label">${Session.data.business_name}</div>
+            <div class="nibex-tier-badge">${tc.label}</div>
           </div>
         </div>
 
         <div id="ceiling-warning" class="ceiling-warning" style="display:none">
-          ⚠ One or more dimensions have dereliction flags applied. Affected dimension scores are capped at 2 until resolved.
+          ⚠ One or more dimensions have dereliction flags. Affected dimension scores are capped at 2 until resolved.
+        </div>
+        <div id="red-flag-banner" class="red-flag-global-banner" style="display:none">
+          ⚑ Red flags have been identified in restricted dimensions. Upgrade to Standard recommended to assess fully.
         </div>
 
         ${panels}
 
-        <div style="height:100px;flex-shrink:0;"></div>
+        <div style="padding:16px 16px 0;display:flex;gap:12px;flex-wrap:wrap">
+          ${upgradeBtn}
+        </div>
+        <div style="height:100px;flex-shrink:0"></div>
       </div>
 
       <div class="bottom-bar">
         <button class="btn btn-ghost" onclick="App.showSessionPicker()">← Sessions</button>
         <button class="btn btn-primary" onclick="App.generateTaskList()">Generate task list</button>
-      </div>
-    `;
+      </div>`;
   },
 
-  buildDimensionPanel(dim) {
-    const subElements = dim.subElements.map(sub => this.buildSubElement(dim.id, sub)).join('');
-
+  _buildDimensionPanel(dim) {
+    if (Session.isRedFlagDim(dim.id)) return this._buildRedFlagPanel(dim);
+    const subs = dim.subElements.map(sub => this._buildSubElement(dim.id, sub)).join('');
     return `
       <div class="dimension-panel" id="dim-panel-${dim.id}">
         <div class="dimension-header">
           <div class="dimension-title">${dim.id}. ${dim.label}</div>
-          <div class="dimension-meta">
-            <span>${dim.subElements.length} sub-elements</span>
-            <span>${dim.description || ''}</span>
-          </div>
+          <div class="dimension-meta"><span>${dim.subElements.length} sub-elements</span><span>${dim.description||''}</span></div>
           <div class="dimension-progress">
-            <div class="progress-bar">
-              <div class="progress-fill" id="progress-fill-${dim.id}" style="width:0%"></div>
-            </div>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill-${dim.id}" style="width:0%"></div></div>
             <span class="progress-label" id="progress-label-${dim.id}">0 of ${dim.subElements.length} scored</span>
           </div>
         </div>
-        ${subElements}
-      </div>
-    `;
+        ${subs}
+      </div>`;
   },
 
-  buildSubElement(dimId, sub) {
-    const key = `${dimId}.${sub.id}`;
-    const currentScore = Session.data.scores[key];
-    const currentNotes = Session.data.notes[key] || '';
-    const currentTasks = Session.data.tasks[key] || '';
-    const currentEvidence = Session.data.evidence_basis[key] || '';
+  _buildRedFlagPanel(dim) {
+    const subs = dim.subElements.map(sub => this._buildRedFlagSubElement(dim.id, sub)).join('');
+    return `
+      <div class="dimension-panel dimension-redflag" id="dim-panel-${dim.id}">
+        <div class="dimension-header">
+          <div class="rf-mode-badge">⚑ RED FLAG SCREEN ONLY</div>
+          <div class="dimension-title">${dim.id}. ${dim.label}</div>
+          <div class="dimension-meta"><span>${dim.subElements.length} sub-elements</span><span>${dim.description||''}</span></div>
+          <div class="rf-disclaimer">
+            This dimension is outside the scope of a Foundations assessment. Findings are for ethical identification only.
+            No remedial works will be undertaken against derelictions identified here without upgrading to Standard.
+            If concerns are identified the client will be notified and an upgrade recommended.
+          </div>
+          <div class="dimension-progress">
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill-${dim.id}" style="width:0%"></div></div>
+            <span class="progress-label" id="progress-label-${dim.id}">0 of ${dim.subElements.length} screened</span>
+          </div>
+        </div>
+        ${subs}
+      </div>`;
+  },
 
+  _buildRedFlagSubElement(dimId, sub) {
+    const key = `${dimId}.${sub.id}`;
+    const existing = Session.data.red_flags?.[key];
+    const isFlagged  = existing?.flagged === true;
+    const isCleared  = existing?.flagged === false;
+    const rfNotes    = existing?.notes || '';
+    return `
+      <div class="sub-element sub-element-rf" id="sub-${dimId}-${sub.id}" data-dim="${dimId}" data-sub="${sub.id}">
+        <div class="sub-element-header" onclick="UI.toggleSubElement(this.closest('.sub-element'))">
+          <span class="sub-element-num">${dimId}.${sub.id}</span>
+          <span class="sub-element-title">${sub.label}</span>
+          <span class="chip-slot">${UI.renderRedFlagChip(dimId, sub.id)}</span>
+          <i class="ti ti-chevron-down chevron"></i>
+        </div>
+        <div class="sub-element-body">
+          ${sub.question ? `
+          <div class="guidance-toggle" onclick="this.nextElementSibling.classList.toggle('open')">
+            <i class="ti ti-help-circle" style="font-size:16px"></i> Screening guidance
+            <i class="ti ti-chevron-down" style="font-size:14px"></i>
+          </div>
+          <div class="guidance-panel">
+            <div class="guidance-section"><div class="guidance-label">Observe / ask</div><div class="guidance-text">${sub.question}</div></div>
+            ${sub.scoringCriteria?.includes('-1:') ? `<div class="guidance-section"><div class="guidance-label">Dereliction indicators</div><div class="guidance-text">${sub.scoringCriteria.split('0:')[0].replace(/^-1:\s*/,'').trim()}</div></div>` : ''}
+          </div>` : ''}
+          <div class="rf-controls">
+            <button class="rf-btn rf-btn-clear ${isCleared?'rf-active-clear':''}"
+              onclick="UI.setRedFlag(${dimId},'${sub.id}',false)">✓ No concern</button>
+            <button class="rf-btn rf-btn-flag ${isFlagged?'rf-active-flag':''}"
+              onclick="UI.setRedFlag(${dimId},'${sub.id}',true)">⚑ Red flag identified</button>
+          </div>
+          <div class="field-group" style="margin-top:10px">
+            <label class="field-label">Observation notes</label>
+            <textarea id="rf-notes-${dimId}-${sub.id}"
+              placeholder="Briefly describe what was observed. If flagged, note what was seen and why."
+              oninput="Session.data.red_flags['${dimId}.${sub.id}']&&(Session.data.red_flags['${dimId}.${sub.id}'].notes=this.value,Session.save())">${rfNotes}</textarea>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  _buildSubElement(dimId, sub) {
+    const key = `${dimId}.${sub.id}`;
+    const currentScore    = Session.data.scores[key];
+    const currentNotes    = Session.data.notes[key]           || '';
+    const currentTasks    = Session.data.tasks[key]           || '';
+    const currentEvidence = Session.data.evidence_basis[key]  || '';
+    const currentER       = Session.data.evidence_reviewed?.[key] || '';
+    const tier = Session.data.tier || 'standard';
+    const subKey = `${dimId}.${sub.id}`;
+    const hasDereliction = DERELICTION_SUBS.has(subKey);
+
+    // Bug 2 fix: -1 button only rendered if dereliction criteria defined
     const scoreButtons = ['-1','0','1','2','3','4','5','na','p'].map(s => {
-      const label = s === 'na' ? 'N/A' : s === 'p' ? 'P' : s;
-      const meta = SCORE_META[s];
-      const selectedClass = currentScore === s ? (meta?.btnClass || '') : '';
-      return `<button class="score-btn ${selectedClass}" data-score="${s}"
-        onclick="UI.selectScore(${dimId}, '${sub.id}', '${s}', this)">${label}</button>`;
+      if (s==='-1' && !hasDereliction) return '';
+      const label = s==='na'?'N/A': s==='p'?'P': s;
+      const meta  = SCORE_META[s];
+      const sel   = currentScore===s ? (meta?.btnClass||'') : '';
+      return `<button class="score-btn ${sel}" data-score="${s}"
+        onclick="UI.selectScore(${dimId},'${sub.id}','${s}',this)">${label}</button>`;
     }).join('');
 
-    const currentMeta = currentScore ? SCORE_META[String(currentScore)] : null;
-    const descriptorText = currentMeta ? `${currentMeta.label} — ${currentMeta.desc}` : '';
-    const descriptorVisible = currentMeta ? 'visible' : '';
+    const currentMeta     = currentScore ? SCORE_META[String(currentScore)] : null;
+    const descriptorText  = currentMeta ? `${currentMeta.label} — ${currentMeta.desc}` : '';
+    const descriptorVis   = currentMeta ? 'visible' : '';
+
+    // Complete tier: evidence reviewed field for dim 11 or any sub with dereliction criteria
+    const showER = tier==='complete' && (dimId===11 || hasDereliction);
 
     return `
       <div class="sub-element" id="sub-${dimId}-${sub.id}" data-dim="${dimId}" data-sub="${sub.id}">
@@ -892,41 +1095,47 @@ const App = {
           <span class="sub-element-num">${dimId}.${sub.id}</span>
           <span class="sub-element-title">${sub.label}</span>
           <span class="chip-slot">${UI.renderScoreChip(currentScore)}</span>
-          <i class="ti ti-chevron-down chevron" aria-hidden="true"></i>
+          <i class="ti ti-chevron-down chevron"></i>
         </div>
         <div class="sub-element-body">
-
           ${sub.question ? `
           <div class="guidance-toggle" onclick="this.nextElementSibling.classList.toggle('open')">
-            <i class="ti ti-help-circle" aria-hidden="true" style="font-size:16px"></i>
-            Assessment guidance
-            <i class="ti ti-chevron-down" aria-hidden="true" style="font-size:14px"></i>
+            <i class="ti ti-help-circle" style="font-size:16px"></i> Assessment guidance
+            <i class="ti ti-chevron-down" style="font-size:14px"></i>
           </div>
           <div class="guidance-panel">
-            ${sub.question ? `<div class="guidance-section"><div class="guidance-label">Ask the client</div><div class="guidance-text">${sub.question}</div></div>` : ''}
-            ${sub.listenFor ? `<div class="guidance-section"><div class="guidance-label">Listen for</div><div class="guidance-text">${sub.listenFor}</div></div>` : ''}
+            ${sub.question   ? `<div class="guidance-section"><div class="guidance-label">Ask the client</div><div class="guidance-text">${sub.question}</div></div>` : ''}
+            ${sub.listenFor  ? `<div class="guidance-section"><div class="guidance-label">Listen for</div><div class="guidance-text">${sub.listenFor}</div></div>` : ''}
             ${sub.scoringCriteria ? `<div class="guidance-section"><div class="guidance-label">Scoring guide</div><div class="guidance-text">${sub.scoringCriteria}</div></div>` : ''}
           </div>` : ''}
 
           <div class="field-group">
-            <label class="field-label" for="notes-${dimId}-${sub.id}">Assessor notes</label>
-            <textarea id="notes-${dimId}-${sub.id}" placeholder="Record what the client said, what you observed, and any relevant context..."
-              oninput="Session.setNotes(${dimId}, '${sub.id}', this.value)">${currentNotes}</textarea>
+            <label class="field-label">Assessor notes</label>
+            <textarea id="notes-${dimId}-${sub.id}"
+              placeholder="Record what the client said, what you observed, and any relevant context…"
+              oninput="Session.setNotes(${dimId},'${sub.id}',this.value)">${currentNotes}</textarea>
           </div>
+
+          ${showER ? `
+          <div class="field-group er-field">
+            <label class="field-label"><span class="er-badge">Complete</span> Evidence reviewed</label>
+            <textarea id="er-${dimId}-${sub.id}"
+              placeholder="Document what evidence was sighted to support this score — contracts, policies, certificates, records…"
+              oninput="Session.setEvidenceReviewed(${dimId},'${sub.id}',this.value)">${currentER}</textarea>
+          </div>` : ''}
 
           <div class="ai-section">
             <div class="ai-header">
               <span class="ai-label">AI scoring</span>
-              <button class="ai-analyse-btn" onclick="UI.requestAIScore(${dimId}, '${sub.id}', this)">
-                <i class="ti ti-sparkles" aria-hidden="true" style="font-size:14px"></i>
-                Analyse notes
+              <button class="ai-analyse-btn" onclick="UI.requestAIScore(${dimId},'${sub.id}',this)">
+                <i class="ti ti-sparkles" style="font-size:14px"></i> Analyse notes
               </button>
             </div>
-            <div class="ai-loading" id="ai-loading-${dimId}-${sub.id}">Analysing notes...</div>
+            <div class="ai-loading" id="ai-loading-${dimId}-${sub.id}">Analysing…</div>
             <div class="ai-suggestion" id="ai-suggestion-${dimId}-${sub.id}">
               <div class="ai-suggestion-header">
                 <span class="ai-suggested-score" id="ai-suggested-score-${dimId}-${sub.id}"></span>
-                <button class="ai-accept-btn" onclick="UI.acceptAIScore(${dimId}, '${sub.id}')">Accept</button>
+                <button class="ai-accept-btn" onclick="UI.acceptAIScore(${dimId},'${sub.id}')">Accept</button>
               </div>
               <div class="ai-reasoning" id="ai-reasoning-${dimId}-${sub.id}"></div>
             </div>
@@ -935,71 +1144,72 @@ const App = {
           <div class="score-section">
             <div class="score-label">Score</div>
             <div class="score-buttons">${scoreButtons}</div>
-            <div class="score-descriptor ${descriptorVisible}" style="${currentScore === '-1' ? 'background:var(--score-neg-bg)' : currentScore === '5' ? 'background:var(--score-max-bg)' : ''}">${descriptorText}</div>
+            <div class="score-descriptor ${descriptorVis}"
+              style="${currentScore==='-1'?'background:var(--score-neg-bg)':currentScore==='5'?'background:var(--score-max-bg)':''}">${descriptorText}</div>
           </div>
 
           <div class="tasks-section">
-            <label class="tasks-label" for="tasks-${dimId}-${sub.id}">Tasks to be completed</label>
-            <textarea id="tasks-${dimId}-${sub.id}" placeholder="List any actions required to address gaps or improve this sub-element..."
-              oninput="Session.setTasks(${dimId}, '${sub.id}', this.value)">${currentTasks}</textarea>
+            <label class="tasks-label">Tasks to be completed</label>
+            <textarea id="tasks-${dimId}-${sub.id}"
+              placeholder="List any actions required to address gaps or improve this sub-element…"
+              oninput="Session.setTasks(${dimId},'${sub.id}',this.value)">${currentTasks}</textarea>
           </div>
 
           <div class="evidence-section field-group">
-            <label class="field-label" for="evidence-${dimId}-${sub.id}">Evidence basis</label>
-            <select id="evidence-${dimId}-${sub.id}" onchange="Session.setEvidence(${dimId}, '${sub.id}', this.value)">
+            <label class="field-label">Evidence basis</label>
+            <select id="evidence-${dimId}-${sub.id}" onchange="Session.setEvidence(${dimId},'${sub.id}',this.value)">
               <option value="">— select —</option>
-              <option ${currentEvidence === 'Document verified' ? 'selected' : ''}>Document verified</option>
-              <option ${currentEvidence === 'Client disclosed' ? 'selected' : ''}>Client disclosed</option>
-              <option ${currentEvidence === 'Assessor observation' ? 'selected' : ''}>Assessor observation</option>
-              <option ${currentEvidence === 'Public record' ? 'selected' : ''}>Public record</option>
-              <option ${currentEvidence === 'AI-assisted — assessor confirmed' ? 'selected' : ''}>AI-assisted — assessor confirmed</option>
-              <option ${currentEvidence === 'Unverifiable — Pending' ? 'selected' : ''}>Unverifiable — Pending</option>
+              <option ${currentEvidence==='Document verified'?'selected':''}>Document verified</option>
+              <option ${currentEvidence==='Client disclosed'?'selected':''}>Client disclosed</option>
+              <option ${currentEvidence==='Assessor observation'?'selected':''}>Assessor observation</option>
+              <option ${currentEvidence==='Public record'?'selected':''}>Public record</option>
+              <option ${currentEvidence==='AI-assisted — assessor confirmed'?'selected':''}>AI-assisted — assessor confirmed</option>
+              <option ${currentEvidence==='Unverifiable — Pending'?'selected':''}>Unverifiable — Pending</option>
             </select>
           </div>
-
         </div>
-      </div>
-    `;
+      </div>`;
   },
 
   generateTaskList() {
-    const tasks = [];
-    for (const [key, task] of Object.entries(Session.data.tasks)) {
+    const tasks=[], redFlags=[];
+    for (const [key,task] of Object.entries(Session.data.tasks)) {
       if (!task?.trim()) continue;
-      const [dimId, subId] = key.split('.');
-      const dim = DIMENSIONS.find(d => d.id === parseInt(dimId));
-      const sub = dim?.subElements.find(s => s.id === subId);
+      const [dId,sId] = key.split('.');
+      const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
+      const sub = dim?.subElements.find(s=>s.id===sId);
       if (!sub) continue;
-      const score = Session.data.scores[key];
-      tasks.push({ dimension: dim.label, subElement: sub.label, task, score });
+      tasks.push({dimension:dim.label,subElement:sub.label,task,score:Session.data.scores[key]});
     }
-
-    if (!tasks.length) {
-      alert('No tasks recorded yet. Add tasks to sub-elements as you complete the assessment.');
-      return;
+    for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
+      if (!rf?.flagged) continue;
+      const [dId,sId] = key.split('.');
+      const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
+      const sub = dim?.subElements.find(s=>s.id===sId);
+      if (!sub) continue;
+      redFlags.push({dimension:dim.label,subElement:sub.label,notes:rf.notes});
     }
-
-    const html = `
-      <div style="padding:16px">
-        <h2 style="font-family:var(--font-serif);font-size:24px;margin-bottom:16px">Task completion list — ${Session.data.business_name}</h2>
-        ${tasks.map(t => `
-          <div style="border:0.5px solid var(--rule);border-radius:var(--radius);padding:12px;margin-bottom:8px">
-            <div style="font-size:11px;color:var(--ink-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">${t.dimension} — ${t.subElement}</div>
-            <div style="font-size:14px">${t.task}</div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-
-    const win = window.open('', '_blank');
-    win.document.write(`<!DOCTYPE html><html><head><title>Task list</title><link rel="stylesheet" href="/styles.css"></head><body>${html}</body></html>`);
+    if (!tasks.length && !redFlags.length) { alert('No tasks or red flags recorded yet.'); return; }
+    const html = `<div style="padding:16px;font-family:Georgia,serif">
+      <h2 style="font-size:22px;margin-bottom:16px">Task list — ${Session.data.business_name}</h2>
+      ${tasks.map(t=>`<div style="border:0.5px solid #d4c9b4;padding:12px;margin-bottom:8px;border-radius:4px">
+        <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${t.dimension} — ${t.subElement}</div>
+        <div>${t.task}</div></div>`).join('')}
+      ${redFlags.length?`<h3 style="font-size:18px;margin:20px 0 12px;color:#b91c1c">Red flags — outside Foundations scope</h3>
+        ${redFlags.map(r=>`<div style="border:0.5px solid #b91c1c;padding:12px;margin-bottom:8px;border-radius:4px;background:#fef2f2">
+          <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${r.dimension} — ${r.subElement}</div>
+          <div>${r.notes||'Red flag raised — no notes recorded.'}</div></div>`).join('')}`:''}
+    </div>`;
+    const w = window.open('','_blank');
+    w?.document.write(`<!DOCTYPE html><html><head><title>Task list</title></head><body>${html}</body></html>`);
   },
 
-  renderAuth() {
+  // ── Screen renders ─────────────────────────────────────────────
+  _renderAuth() {
     return `
       <div class="auth-screen">
         <div class="auth-card">
-          <div class="auth-brand">NIBEX<span>Nicomachea Business Assessment</span></div>
+          <div class="auth-brand">NIBEX <span>Nicomachea Business Assessment</span></div>
           <p class="auth-title">Sign in to access your assessments</p>
           <form onsubmit="App.handleSignIn(event)">
             <div class="field-group">
@@ -1014,25 +1224,29 @@ const App = {
             <button type="submit" id="auth-btn" class="btn btn-primary" style="width:100%;margin-top:16px">Sign in</button>
           </form>
         </div>
-      </div>
-    `;
+      </div>`;
   },
 
-  renderSessionPicker(sessions) {
-    const sessionCards = sessions.length ? sessions.map(s => {
-      const name = s.data?.business_name || s.business_name || 'Unnamed session';
+  _renderSessionPicker(sessions) {
+    const cards = sessions.length ? sessions.map(s => {
+      const name  = s.data?.business_name || s.business_name || 'Unnamed';
       const score = s.data?.nibex_score ?? s.nibex_score ?? '—';
-      const date = s.data?.updated_at || s.updated_at;
-      const dateStr = date ? new Date(date).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) : '';
+      const tier  = s.data?.tier || s.tier || 'standard';
+      const tc    = TIER_CONFIG[tier] || TIER_CONFIG.standard;
+      const date  = s.data?.updated_at || s.updated_at;
+      const dateStr = date ? new Date(date).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : '';
       return `
         <div class="session-card" onclick="App.showAssessment('${s.id}')">
-          <div>
+          <div style="flex:1">
             <div class="session-name">${name}</div>
-            <div class="session-meta">${dateStr}</div>
+            <div class="session-meta">${tc.label} · ${dateStr}</div>
           </div>
-          <div class="session-nibex">${score}</div>
-        </div>
-      `;
+          <div style="display:flex;align-items:center;gap:12px">
+            <div class="session-nibex">${score}</div>
+            <button class="btn-delete-session" title="Delete assessment"
+              onclick="event.stopPropagation();App.confirmDeleteSession('${s.id}','${name.replace(/'/g,"\\'")}')">✕</button>
+          </div>
+        </div>`;
     }).join('') : '<p style="color:var(--ink-muted);font-size:14px;padding:16px 0">No assessments yet.</p>';
 
     return `
@@ -1046,18 +1260,111 @@ const App = {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
           <span style="font-size:14px;font-weight:500">Your assessments</span>
-          <button class="btn btn-secondary" onclick="App.newSession()" style="height:36px;padding:0 16px;font-size:13px">+ New assessment</button>
+          <button class="btn btn-secondary" onclick="App.startNewSession()" style="height:36px;padding:0 16px;font-size:13px">+ New assessment</button>
         </div>
-        ${sessionCards}
-      </div>
-    `;
-  }
-};
+        ${cards}
+      </div>`;
+  },
 
-// ── Dimensions data ────────────────────────────────────────────
-// Dimension 1 — Economic Position (full sub-elements with guidance)
-// Remaining dimensions follow same structure
-// Abbreviated here — full data in dimensions.js
+  _renderComplexityScreen() {
+    const questions = COMPLEXITY_Qs.map(q => `
+      <div class="cq-block">
+        <div class="cq-label">${q.label}</div>
+        <div class="cq-opts">
+          ${q.options.map((o,i) => `
+            <button class="cq-opt" data-q="${q.id}" data-i="${i}"
+              onclick="App.handleComplexityAnswer('${q.id}',${i})">${o.l}</button>
+          `).join('')}
+        </div>
+      </div>`).join('');
+
+    return `
+      <div class="flow-screen">
+        <div class="flow-header">
+          <button class="btn btn-ghost" onclick="App.showSessionPicker()">← Back</button>
+          <div class="flow-title">New Assessment</div>
+          <div class="flow-step">Step 1 of 3 — Complexity Indicator</div>
+        </div>
+        <div class="flow-body">
+          <div class="flow-section-label">Companies House lookup <span style="font-size:11px;color:var(--ink-muted)">(optional)</span></div>
+          <div style="display:flex;gap:8px;margin-bottom:4px">
+            <input id="ch-query" type="text" placeholder="Company name or number…"
+              style="flex:1;padding:9px 12px;border:0.5px solid var(--rule);background:var(--surface);font-size:14px">
+            <button class="btn btn-secondary" onclick="App.handleCHSearch()">Look up</button>
+          </div>
+          <div id="ch-status" style="font-size:12px;color:var(--ink-muted);min-height:16px"></div>
+          <div id="ch-results" style="margin-top:8px"></div>
+          <div class="flow-divider"></div>
+          <div class="flow-section-label">Business complexity — answer all five questions</div>
+          ${questions}
+          <div id="complexity-rec" style="display:none;margin-top:20px"></div>
+          <button id="cq-continue" class="btn btn-primary" disabled
+            style="width:100%;margin-top:20px" onclick="App.showTierSelection()">Continue to tier selection →</button>
+        </div>
+      </div>`;
+  },
+
+  _renderTierSelection() {
+    const rec = this._flow.rec;
+    const cards = ['foundations','standard','complete'].map(t => {
+      const tc = TIER_CONFIG[t];
+      const isRec = rec?.tier===t;
+      const isSel = this._flow.tier===t;
+      return `
+        <div class="tier-card ${isRec?'tier-recommended':''} ${isSel?'tier-selected':''}"
+          data-tier="${t}" onclick="App.selectTier('${t}')">
+          ${isRec?'<div class="tier-rec-badge">Recommended</div>':''}
+          <div class="tier-name">${tc.label}</div>
+          <div class="tier-price">£${tc.price.mvp.toLocaleString()} MVP / £${tc.price.standard.toLocaleString()} standard</div>
+          <div class="tier-desc">${tc.desc}</div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="flow-screen">
+        <div class="flow-header">
+          <button class="btn btn-ghost" onclick="App.startNewSession()">← Back</button>
+          <div class="flow-title">Select Tier</div>
+          <div class="flow-step">Step 2 of 3 — Tier Selection</div>
+        </div>
+        <div class="flow-body">
+          ${rec?`<p style="font-size:13px;color:var(--ink-muted);margin-bottom:16px">
+            Based on your answers, we recommend <strong>${TIER_CONFIG[rec.tier].label}</strong> for this business.
+            You can select any tier below.</p>`:''}
+          <div class="tier-cards">${cards}</div>
+          <button id="tier-confirm" class="btn btn-primary" disabled
+            style="width:100%;margin-top:20px" onclick="App.showBusinessNameEntry()">Confirm tier →</button>
+        </div>
+      </div>`;
+  },
+
+  _renderNameEntry() {
+    const tc = TIER_CONFIG[this._flow.tier] || TIER_CONFIG.standard;
+    const chName = this._flow.chData?.profile?.company_name || '';
+    return `
+      <div class="flow-screen">
+        <div class="flow-header">
+          <button class="btn btn-ghost" onclick="App.showTierSelection()">← Back</button>
+          <div class="flow-title">Business Details</div>
+          <div class="flow-step">Step 3 of 3 — Confirm</div>
+        </div>
+        <div class="flow-body">
+          <div style="padding:12px 16px;background:var(--surface);border:0.5px solid var(--rule);border-radius:var(--radius);margin-bottom:20px;display:flex;justify-content:space-between">
+            <span style="font-size:13px;color:var(--ink-muted)">Selected tier</span>
+            <strong style="font-size:13px">${tc.label}</strong>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="biz-name">Business name</label>
+            <input type="text" id="biz-name" value="${chName}"
+              placeholder="Enter the trading name of the business…"
+              style="width:100%;padding:10px 12px;font-size:15px;border:0.5px solid var(--rule);background:var(--surface)">
+          </div>
+          <button class="btn btn-primary" style="width:100%;margin-top:20px" onclick="App.createSession()">
+            Create assessment →
+          </button>
+        </div>
+      </div>`;
+  },
+};
 
 const DIMENSIONS = [
   {
