@@ -815,6 +815,11 @@ const App = {
     document.getElementById('app').innerHTML = this._renderTierSelection();
   },
 
+  goBackToComplexity() {
+    // Navigate back without resetting flow state — preserves CH data, answers, recommendation
+    document.getElementById('app').innerHTML = this._renderComplexityScreen();
+  },
+
   selectTier(tier) {
     this._flow.tier = tier;
     document.querySelectorAll('.tier-card').forEach(c=>c.classList.remove('tier-selected'));
@@ -1267,16 +1272,31 @@ const App = {
   },
 
   _renderComplexityScreen() {
+    // Render questions, restoring any previously selected answers from _flow state
     const questions = COMPLEXITY_Qs.map(q => `
       <div class="cq-block">
         <div class="cq-label">${q.label}</div>
         <div class="cq-opts">
-          ${q.options.map((o,i) => `
-            <button class="cq-opt" data-q="${q.id}" data-i="${i}"
-              onclick="App.handleComplexityAnswer('${q.id}',${i})">${o.l}</button>
-          `).join('')}
+          ${q.options.map((o,i) => {
+            const isSelected = this._flow.answers[q.id] === i;
+            return `<button class="cq-opt${isSelected ? ' cq-selected' : ''}" data-q="${q.id}" data-i="${i}"
+              onclick="App.handleComplexityAnswer('${q.id}',${i})">${o.l}</button>`;
+          }).join('')}
         </div>
       </div>`).join('');
+
+    // If all answers already exist (back navigation), restore recommendation immediately
+    const allAnswered = Object.keys(this._flow.answers).length === COMPLEXITY_Qs.length;
+    const rec = allAnswered ? complexityRecommendation(this._flow.answers) : null;
+    if (rec) this._flow.rec = rec;
+    const recHtml = rec ? (() => {
+      const tc = TIER_CONFIG[rec.tier];
+      return `<div class="rec-box"><span class="rec-label">Recommended</span><strong>${tc.label}</strong><p>${tc.desc}</p></div>`;
+    })() : '';
+
+    const chStatus = this._flow.chData
+      ? `✓ ${this._flow.chData.profile?.company_name || 'Company'} data loaded.`
+      : '';
 
     return `
       <div class="flow-screen">
@@ -1292,13 +1312,13 @@ const App = {
               style="flex:1;padding:9px 12px;border:0.5px solid var(--rule);background:var(--surface);font-size:14px">
             <button class="btn btn-secondary" onclick="App.handleCHSearch()">Look up</button>
           </div>
-          <div id="ch-status" style="font-size:12px;color:var(--ink-muted);min-height:16px"></div>
+          <div id="ch-status" style="font-size:12px;color:var(--ink-muted);min-height:16px">${chStatus}</div>
           <div id="ch-results" style="margin-top:8px"></div>
           <div class="flow-divider"></div>
           <div class="flow-section-label">Business complexity — answer all five questions</div>
           ${questions}
-          <div id="complexity-rec" style="display:none;margin-top:20px"></div>
-          <button id="cq-continue" class="btn btn-primary" disabled
+          <div id="complexity-rec" style="display:${allAnswered ? 'block' : 'none'};margin-top:20px">${recHtml}</div>
+          <button id="cq-continue" class="btn btn-primary" ${allAnswered ? '' : 'disabled'}
             style="width:100%;margin-top:20px" onclick="App.showTierSelection()">Continue to tier selection →</button>
         </div>
       </div>`;
@@ -1322,7 +1342,7 @@ const App = {
     return `
       <div class="flow-screen">
         <div class="flow-header">
-          <button class="btn btn-ghost" onclick="App.startNewSession()">← Back</button>
+          <button class="btn btn-ghost" onclick="App.goBackToComplexity()">← Back</button>
           <div class="flow-title">Select Tier</div>
           <div class="flow-step">Step 2 of 3 — Tier Selection</div>
         </div>
