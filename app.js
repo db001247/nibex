@@ -37,18 +37,22 @@ const TIER_CONFIG = {
   },
 };
 
-// Sub-elements where -1 (Dereliction) is explicitly defined — -1 hidden elsewhere
-const DERELICTION_SUBS = new Set([
-  '1.1','1.3','1.4','1.6','1.7',
-  '2.1','2.2','2.3','2.4','2.5',
-  '4.1','4.2','4.3','4.4','4.5',
-  '5.1','5.2','5.4',
-  '6.1','6.3','6.5','6.9',
-  '7.1','7.2','7.3','7.4','7.5','7.6',
-  '8.3',
-  '9.7',
-  '11.1','11.2','11.3','11.4','11.5','11.6','11.7','11.8','11.9',
-]);
+// Single source of truth for whether a sub-element has a genuine -1 (Dereliction)
+// criterion defined. Derives directly from the scoringCriteria text rather than
+// a separately-maintained list, so the button, the guidance panel, and the
+// Complete-tier evidence field can never drift out of sync with each other again.
+//
+// Some scoringCriteria strings use "-1: N/A." as an explicit placeholder meaning
+// "no dereliction condition applies here" — that must NOT count as a real
+// dereliction clause, even though the substring "-1:" is technically present.
+function getDerelictionClause(scoringCriteria) {
+  if (!scoringCriteria) return null;
+  const match = scoringCriteria.match(/-1:\s*(.*?)\s*0:/);
+  if (!match) return null;
+  const clause = match[1].trim();
+  if (clause === 'N/A.' || clause === 'N/A') return null;
+  return clause;
+}
 
 // ── Complexity indicator ───────────────────────────────────────
 const COMPLEXITY_Qs = [
@@ -1048,7 +1052,7 @@ const App = {
           </div>
           <div class="guidance-panel">
             <div class="guidance-section"><div class="guidance-label">Observe / ask</div><div class="guidance-text">${sub.question}</div></div>
-            ${sub.scoringCriteria?.includes('-1:') ? `<div class="guidance-section"><div class="guidance-label">Dereliction indicators</div><div class="guidance-text">${sub.scoringCriteria.split('0:')[0].replace(/^-1:\s*/,'').trim()}</div></div>` : ''}
+            ${getDerelictionClause(sub.scoringCriteria) ? `<div class="guidance-section"><div class="guidance-label">Dereliction indicators</div><div class="guidance-text">${getDerelictionClause(sub.scoringCriteria)}</div></div>` : ''}
           </div>` : ''}
           <div class="rf-controls">
             <button class="rf-btn rf-btn-clear ${isCleared?'rf-active-clear':''}"
@@ -1074,10 +1078,11 @@ const App = {
     const currentEvidence = Session.data.evidence_basis[key]  || '';
     const currentER       = Session.data.evidence_reviewed?.[key] || '';
     const tier = Session.data.tier || 'standard';
-    const subKey = `${dimId}.${sub.id}`;
-    const hasDereliction = DERELICTION_SUBS.has(subKey);
+    const hasDereliction = !!getDerelictionClause(sub.scoringCriteria);
 
-    // Bug 2 fix: -1 button only rendered if dereliction criteria defined
+    // -1 button only rendered if a genuine dereliction criterion is defined
+    // in this sub-element's own scoringCriteria text (single source of truth —
+    // see getDerelictionClause above).
     const scoreButtons = ['-1','0','1','2','3','4','5','na','p'].map(s => {
       if (s==='-1' && !hasDereliction) return '';
       const label = s==='na'?'N/A': s==='p'?'P': s;
