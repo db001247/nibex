@@ -646,6 +646,15 @@ const UI = {
   async openStaffRegistry() {
     const modal = document.getElementById('staff-registry-modal');
     if (!modal) return;
+
+    // Self-heal: sessions created before the client registry existed won't
+    // have a client_code yet. Look one up (or create one) now rather than
+    // leaving those sessions permanently unable to use staff registry.
+    if (!Session.data.client_code && Session.data.business_name) {
+      const code = await ClientRegistry.getOrCreate(Session.data.business_name);
+      if (code) { Session.data.client_code = code; Session.save(); }
+    }
+
     modal.style.display = 'flex';
     modal.innerHTML = `<div class="staff-modal-backdrop" onclick="UI.closeStaffRegistry()"></div>
       <div class="staff-modal-card">
