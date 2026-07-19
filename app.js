@@ -320,7 +320,7 @@ const SessionTimeout = {
 const Session = {
   id: null,
   data: {
-    business_name:'', business_type:'', owner_name:'',
+    business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
     ai_suggestions:{}, red_flags:{},
@@ -333,7 +333,7 @@ const Session = {
 
   _defaults() {
     return {
-      business_name:'', business_type:'', owner_name:'',
+      business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
       ai_suggestions:{}, red_flags:{},
@@ -345,12 +345,13 @@ const Session = {
     };
   },
 
-  new(businessName, tier, complexityAnswers, complexityRec, chData) {
+  new(businessName, tier, complexityAnswers, complexityRec, chData, clientCode) {
     const tc = TIER_CONFIG[tier] || TIER_CONFIG.standard;
     this.id = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
     this.data = {
       ...this._defaults(),
       business_name: businessName,
+      client_code: clientCode || null,
       tier,
       active_dimensions: tc.allDims,
       red_flag_dims:     tc.redFlagDims,
@@ -528,9 +529,198 @@ const CH = {
   },
 };
 
-// ── UI ─────────────────────────────────────────────────────────
+// ── Client registry (pseudonymisation: business → permanent code) ──
+const ClientRegistry = {
+  _normalise(name) {
+    return (name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  },
+
+  // Looks up an existing client by normalised business name; creates a new
+  // permanent client code if none exists yet. Returns the client_code.
+  // This is the one place a real business name is ever written to
+  // nibex_clients — everywhere else in the app works with the code.
+  async getOrCreate(businessName) {
+    const normalised = this._normalise(businessName);
+    if (!normalised) return null;
+    try {
+      const existing = await SyncEngine._fetch(
+        `${CONFIG.supabaseUrl}/rest/v1/nibex_clients?business_name_normalised=eq.${encodeURIComponent(normalised)}&select=client_code`, {}
+      );
+      if (existing.ok) {
+        const rows = await existing.json();
+        if (rows?.length) return rows[0].client_code;
+      }
+    } catch(e) { console.error('Client lookup failed:', e); }
+
+    // Not found — create a new permanent code
+    const year = new Date().getFullYear();
+    const seq = String(Date.now()).slice(-5); // simple unique-enough sequence; refine later if needed
+    const clientCode = `NCX-${year}-${seq}`;
+    try {
+      const created = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_clients`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Prefer':'return=representation' },
+        body: JSON.stringify({
+          client_code: clientCode,
+          business_name: businessName,
+          business_name_normalised: normalised,
+        }),
+      });
+      if (created.ok) return clientCode;
+      console.error('Client creation failed:', created.status, await created.text());
+    } catch(e) { console.error('Client creation failed:', e); }
+    return null;
+  },
+};
+
+// ── Staff registry (pseudonymisation: known client staff → codes) ──
+const StaffRegistry = {
+  async list(clientCode) {
+    if (!clientCode) return [];
+    try {
+      const r = await SyncEngine._fetch(
+        `${CONFIG.supabaseUrl}/rest/v1/nibex_client_staff?client_code=eq.${encodeURIComponent(clientCode)}&select=*&order=full_name.asc`, {}
+      );
+      return r.ok ? await r.json() : [];
+    } catch(e) { console.error('Staff list failed:', e); return []; }
+  },
+
+  async add(clientCode, fullName, roleTitle) {
+    if (!clientCode || !fullName?.trim()) return null;
+    const existing = await this.list(clientCode);
+    const staffCode = `${clientCode}-S${String(existing.length + 1).padStart(2,'0')}`;
+    try {
+      const r = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_client_staff`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Prefer':'return=representation' },
+        body: JSON.stringify({ client_code: clientCode, staff_code: staffCode, full_name: fullName.trim(), role_title: roleTitle || null }),
+      });
+      if (r.ok) return (await r.json())[0];
+      console.error('Staff add failed:', r.status, await r.text());
+    } catch(e) { console.error('Staff add failed:', e); }
+    return null;
+  },
+
+  // Bulk add from simple CSV text. Expected columns: full_name, role_title (header row optional).
+  // Kept deliberately simple — no quoted-field handling — since this is for
+  // straightforward name/role lists, not general-purpose CSV data.
+  async addFromCSV(clientCode, csvText) {
+    const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return { added: 0, errors: [] };
+    // Skip a header row if it looks like one
+    const startIdx = /^(full[_ ]?name|name)/i.test(lines[0]) ? 1 : 0;
+    let added = 0;
+    const errors = [];
+    for (let i = startIdx; i < lines.length; i++) {
+      const [name, role] = lines[i].split(',').map(s => s?.trim());
+      if (!name) { errors.push(`Row ${i+1}: no name found`); continue; }
+      const result = await this.add(clientCode, name, role);
+      if (result) added++; else errors.push(`Row ${i+1}: failed to add "${name}"`);
+    }
+    return { added, errors };
+  },
+
+  // Replaces any known staff full name found in `text` with that staff
+  // member's code. Case-insensitive whole-name match. This handles the
+  // client's own registered staff only — it does not catch third-party
+  // names (suppliers, disputing parties, etc.) mentioned incidentally,
+  // which needs a separate, pattern-based safety net — not yet built.
+  scrub(text, staffList) {
+    if (!text || !staffList?.length) return text;
+    let scrubbed = text;
+    for (const staff of staffList) {
+      if (!staff.full_name) continue;
+      const escaped = staff.full_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(`\\b${escaped}\\b`, 'gi');
+      scrubbed = scrubbed.replace(pattern, staff.staff_code);
+    }
+    return scrubbed;
+  },
+};
+
+
 const UI = {
   currentDim: null,
+
+  // ── Staff registry modal ─────────────────────────────────────
+  async openStaffRegistry() {
+    const modal = document.getElementById('staff-registry-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    modal.innerHTML = `<div class="staff-modal-backdrop" onclick="UI.closeStaffRegistry()"></div>
+      <div class="staff-modal-card">
+        <div style="font-size:16px;font-weight:600;margin-bottom:4px">Staff registry — ${Session.data.business_name}</div>
+        <div style="font-size:12px;color:var(--ink-muted);margin-bottom:14px">
+          Registered staff are automatically replaced with their code in any notes sent for AI scoring suggestions.
+          This does not affect what you see on screen — full names are always shown to you here.
+        </div>
+        <div id="staff-list-area">Loading…</div>
+        <div style="border-top:1px solid var(--border,#e5e2da);margin:14px 0;padding-top:14px">
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">Add a staff member</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="staff-name-input" placeholder="Full name" style="flex:1;min-width:140px;padding:8px">
+            <input id="staff-role-input" placeholder="Role (optional)" style="flex:1;min-width:120px;padding:8px">
+            <button class="btn btn-primary" onclick="UI.addStaffMember()">Add</button>
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--border,#e5e2da);margin:14px 0;padding-top:14px">
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">Or upload a CSV</div>
+          <div style="font-size:11px;color:var(--ink-muted);margin-bottom:8px">Format: one row per person, "Full Name,Role" — header row optional.</div>
+          <input type="file" id="staff-csv-input" accept=".csv" onchange="UI.uploadStaffCSV(this)">
+          <div id="staff-csv-result" style="font-size:12px;margin-top:6px"></div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:14px" onclick="UI.closeStaffRegistry()">Close</button>
+      </div>`;
+    await this._refreshStaffList();
+  },
+
+  closeStaffRegistry() {
+    const modal = document.getElementById('staff-registry-modal');
+    if (modal) { modal.style.display = 'none'; modal.innerHTML = ''; }
+  },
+
+  async _refreshStaffList() {
+    const area = document.getElementById('staff-list-area');
+    if (!area) return;
+    if (!Session.data.client_code) {
+      area.innerHTML = `<div style="font-size:12px;color:var(--ink-muted)">No client code on this session yet.</div>`;
+      return;
+    }
+    const staff = await StaffRegistry.list(Session.data.client_code);
+    if (!staff.length) {
+      area.innerHTML = `<div style="font-size:12px;color:var(--ink-muted)">No staff registered yet.</div>`;
+      return;
+    }
+    area.innerHTML = `<div style="max-height:180px;overflow-y:auto">${staff.map(s => `
+      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border,#eee);font-size:13px">
+        <span>${s.full_name}${s.role_title ? ` <span style="color:var(--ink-muted)">— ${s.role_title}</span>` : ''}</span>
+        <span style="font-family:monospace;color:var(--ink-muted);font-size:11px">${s.staff_code}</span>
+      </div>`).join('')}</div>`;
+  },
+
+  async addStaffMember() {
+    const nameInput = document.getElementById('staff-name-input');
+    const roleInput = document.getElementById('staff-role-input');
+    const name = nameInput?.value?.trim();
+    if (!name) return;
+    if (!Session.data.client_code) { alert('No client code on this session yet.'); return; }
+    const result = await StaffRegistry.add(Session.data.client_code, name, roleInput?.value?.trim());
+    if (!result) { alert('Could not add staff member — check your connection and try again.'); return; }
+    nameInput.value = ''; roleInput.value = '';
+    await this._refreshStaffList();
+  },
+
+  async uploadStaffCSV(input) {
+    const file = input.files?.[0];
+    const resultEl = document.getElementById('staff-csv-result');
+    if (!file || !Session.data.client_code) return;
+    const text = await file.text();
+    resultEl.textContent = 'Uploading…';
+    const { added, errors } = await StaffRegistry.addFromCSV(Session.data.client_code, text);
+    resultEl.textContent = `Added ${added} staff member(s).` + (errors.length ? ` ${errors.length} row(s) had issues.` : '');
+    input.value = '';
+    await this._refreshStaffList();
+  },
 
   showSyncStatus(status) {
     const el = document.getElementById('sync-status');
@@ -835,11 +1025,16 @@ const App = {
     document.getElementById('app').innerHTML = this._renderNameEntry();
   },
 
-  createSession() {
+  async createSession() {
     const name = document.getElementById('biz-name')?.value?.trim();
     if (!name) { alert('Please enter the business name.'); return; }
     const tier = this._flow.tier || 'standard';
-    Session.new(name, tier, this._flow.answers, this._flow.rec, this._flow.chData);
+    const clientCode = await ClientRegistry.getOrCreate(name);
+    if (!clientCode) {
+      alert('Could not set up the client record — check your connection and try again.');
+      return;
+    }
+    Session.new(name, tier, this._flow.answers, this._flow.rec, this._flow.chData, clientCode);
     this._renderAssessment();
     // Bug 1 fix: immediately save so new session is in the list
     Session.save();
@@ -967,8 +1162,11 @@ const App = {
           <div style="text-align:right">
             <div class="nibex-score-label">${Session.data.business_name}</div>
             <div class="nibex-tier-badge">${tc.label}</div>
+            <button class="btn btn-secondary" style="margin-top:6px;padding:4px 10px;font-size:12px" onclick="UI.openStaffRegistry()">Manage staff</button>
           </div>
         </div>
+
+        <div id="staff-registry-modal" style="display:none"></div>
 
         <div id="ceiling-warning" class="ceiling-warning" style="display:none">
           ⚠ One or more dimensions have dereliction flags. Affected dimension scores are capped at 2 until resolved.
