@@ -7,6 +7,8 @@ const CONFIG = {
   anthropicProxy: '/api/claude',
   // Companies House: proxied via Supabase Edge Function — key never in client code
   chEdgeFunction: 'https://ksrrurabddfngnhfoqln.supabase.co/functions/v1/companies-house',
+  // AI scoring: proxied via Supabase Edge Function — Anthropic key never in client code
+  aiEdgeFunction: 'https://ksrrurabddfngnhfoqln.supabase.co/functions/v1/ai-scoring-proxy',
 };
 
 // ── Tier definitions ───────────────────────────────────────────
@@ -488,18 +490,32 @@ const AIScoring = {
   async suggest(dimId, subId, notes, scoringCriteria, question) {
     const sub = DIMENSIONS.find(d=>d.id===dimId)?.subElements.find(s=>s.id===subId);
     if (!sub) return null;
+
+    // Pseudonymisation: scrub any registered staff names out of the notes
+    // before they leave the browser. Known limitation: this only catches
+    // the assessed business's own registered staff — not third-party names
+    // (suppliers, disputing parties, etc.) mentioned incidentally. That
+    // needs a separate, pattern-based safety net, not yet built.
+    let safeNotes = notes;
+    if (Session.data.client_code) {
+      const staffList = await StaffRegistry.list(Session.data.client_code);
+      safeNotes = StaffRegistry.scrub(notes, staffList);
+    }
+
     const prompt = `You are an expert business assessor using the NIBEX framework.
 SUB-ELEMENT: ${sub.label}
 DIMENSION: ${DIMENSIONS.find(d=>d.id===dimId)?.label}
 SCORING SCALE: -1=Dereliction, 0=Absent, 1=Minimal, 2=Basic, 3=Functional, 4=Developed, 5=Optimised, na=N/A, p=Pending
 SCORING CRITERIA: ${scoringCriteria}
-ASSESSOR NOTES: ${notes}
+ASSESSOR NOTES: ${safeNotes}
 Respond ONLY with JSON: {"score":"-1|0|1|2|3|4|5|na|p","reasoning":"1-2 sentences"}`;
     try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:300,messages:[{role:'user',content:prompt}]}),
+      // Calls our own Edge Function proxy, never Anthropic directly — the
+      // real API key lives server-side only, same pattern as Companies House.
+      const r = await SyncEngine._fetch(CONFIG.aiEdgeFunction, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({ prompt }),
       });
       if (!r.ok) throw new Error('API error');
       const d = await r.json();
