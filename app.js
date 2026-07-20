@@ -79,6 +79,22 @@ function complexityRecommendation(answers) {
   return { score: total, tier: total <= 3 ? 'foundations' : total <= 9 ? 'standard' : 'complete' };
 }
 
+// Rough heuristic only — SIC code prefixes commonly associated with regulated
+// activity (financial services, legal, health/social care, food service,
+// childcare/education). This is a starting suggestion for the assessor to
+// confirm or override, never an automatic answer — SIC codes are a loose
+// proxy for regulation, not a reliable determination of it.
+const REGULATED_SIC_PREFIXES = ['64','65','66','69.1','69.10','86','87','88','56.1','56.2'];
+
+function suggestRegulatedFromSIC(chData) {
+  const codes = chData?.profile?.sic_codes;
+  if (!codes?.length) return null; // no data to suggest from
+  const matched = codes.some(code =>
+    REGULATED_SIC_PREFIXES.some(prefix => String(code).startsWith(prefix))
+  );
+  return matched;
+}
+
 // ── Score metadata ─────────────────────────────────────────────
 const SCORE_META = {
   '-1': { label:'Dereliction', desc:'Active legal jeopardy — the business is in breach of a legal obligation creating risk to customers, employees, investors, or the business itself. A dimension ceiling of 2 is applied until resolved.', chipClass:'chip-neg',     btnClass:'selected-neg' },
@@ -1067,9 +1083,16 @@ const App = {
 
   // ── Upgrade tier ───────────────────────────────────────────────
   upgradeTier(newTier) {
-    if (!confirm(`Upgrade this session to ${TIER_CONFIG[newTier].label}? This cannot be reversed.`)) return;
+    const fromFoundations = Session.data.tier === 'foundations' && newTier === 'standard';
+    const confirmMsg = fromFoundations
+      ? `Upgrade this session to ${TIER_CONFIG[newTier].label}?\n\nPer Nicomachea policy, the Foundations fee already paid will be credited in full against the Standard fee. This cannot be reversed.`
+      : `Upgrade this session to ${TIER_CONFIG[newTier].label}? This cannot be reversed.`;
+    if (!confirm(confirmMsg)) return;
     const ok = Session.upgradeTier(newTier);
     if (!ok) { alert('Downgrading is not permitted.'); return; }
+    if (fromFoundations) {
+      alert('Upgrade complete. The Foundations fee has been credited in full against Standard — please confirm the adjusted amount due with the client directly, as exact pricing depends on which rate (MVP or standard) was originally agreed.');
+    }
     // Navigate to first newly-unlocked dimension
     const newDim = Session.data.tier==='standard' ? 2 : 1;
     this._renderAssessment();
@@ -1187,6 +1210,7 @@ const App = {
           <div style="text-align:right">
             <div class="nibex-score-label">${Session.data.business_name}</div>
             <div class="nibex-tier-badge">${tc.label}</div>
+            ${Session.data.foundations_credit_recorded ? `<div class="foundations-credit-badge" title="Foundations fee credited in full against this tier">✓ Foundations fee credited</div>` : ''}
             <button class="btn btn-secondary" style="margin-top:6px;padding:4px 10px;font-size:12px" onclick="UI.openStaffRegistry()">Manage staff</button>
           </div>
         </div>
@@ -1500,10 +1524,21 @@ const App = {
   },
 
   _renderComplexityScreen() {
+    // Suggestion only, from Companies House SIC codes if available — the
+    // assessor still answers this question themselves; nothing is
+    // auto-selected. See suggestRegulatedFromSIC for the caveats.
+    const sicSuggestion = suggestRegulatedFromSIC(this._flow.chData);
+
     // Render questions, restoring any previously selected answers from _flow state
     const questions = COMPLEXITY_Qs.map(q => `
       <div class="cq-block">
         <div class="cq-label">${q.label}</div>
+        ${(q.id === 'regulated' && sicSuggestion !== null) ? `
+        <div class="cq-sic-hint">
+          ${sicSuggestion
+            ? '💡 Companies House SIC code suggests this may be a regulated sector — please confirm, this is a rough guide only, not a determination.'
+            : '💡 Companies House SIC code doesn\'t suggest an obviously regulated sector — please still confirm based on what you actually know about the business.'}
+        </div>` : ''}
         <div class="cq-opts">
           ${q.options.map((o,i) => {
             const isSelected = this._flow.answers[q.id] === i;
