@@ -1028,6 +1028,10 @@ const App = {
     const data = await CH.getCompany(number);
     this._flow.chData = data;
     document.getElementById('ch-status').textContent = data ? `✓ ${name} data loaded.` : 'Could not load full profile — continuing without.';
+    // Refresh the regulated-sector hint now that CH data actually exists —
+    // it was empty at initial render since the lookup hadn't run yet.
+    const hintContainer = document.getElementById('cq-sic-hint-container');
+    if (hintContainer) hintContainer.innerHTML = this._sicHintHTML();
   },
 
   handleComplexityAnswer(qId, optIdx) {
@@ -1523,22 +1527,22 @@ const App = {
       </div>`;
   },
 
-  _renderComplexityScreen() {
-    // Suggestion only, from Companies House SIC codes if available — the
-    // assessor still answers this question themselves; nothing is
-    // auto-selected. See suggestRegulatedFromSIC for the caveats.
+  _sicHintHTML() {
     const sicSuggestion = suggestRegulatedFromSIC(this._flow.chData);
+    if (sicSuggestion === null) return '';
+    return `<div class="cq-sic-hint">
+      ${sicSuggestion
+        ? '💡 Companies House SIC code suggests this may be a regulated sector — please confirm, this is a rough guide only, not a determination.'
+        : '💡 Companies House SIC code doesn\'t suggest an obviously regulated sector — please still confirm based on what you actually know about the business.'}
+    </div>`;
+  },
 
+  _renderComplexityScreen() {
     // Render questions, restoring any previously selected answers from _flow state
     const questions = COMPLEXITY_Qs.map(q => `
       <div class="cq-block">
         <div class="cq-label">${q.label}</div>
-        ${(q.id === 'regulated' && sicSuggestion !== null) ? `
-        <div class="cq-sic-hint">
-          ${sicSuggestion
-            ? '💡 Companies House SIC code suggests this may be a regulated sector — please confirm, this is a rough guide only, not a determination.'
-            : '💡 Companies House SIC code doesn\'t suggest an obviously regulated sector — please still confirm based on what you actually know about the business.'}
-        </div>` : ''}
+        ${q.id === 'regulated' ? `<div id="cq-sic-hint-container">${this._sicHintHTML()}</div>` : ''}
         <div class="cq-opts">
           ${q.options.map((o,i) => {
             const isSelected = this._flow.answers[q.id] === i;
