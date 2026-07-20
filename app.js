@@ -84,7 +84,7 @@ function complexityRecommendation(answers) {
 // childcare/education). This is a starting suggestion for the assessor to
 // confirm or override, never an automatic answer — SIC codes are a loose
 // proxy for regulation, not a reliable determination of it.
-const REGULATED_SIC_PREFIXES = ['64','65','66','69.1','69.10','86','87','88','56.1','56.2'];
+const REGULATED_SIC_PREFIXES = ['64','65','66','69','86','87','88','56'];
 
 function suggestRegulatedFromSIC(chData) {
   const codes = chData?.profile?.sic_codes;
