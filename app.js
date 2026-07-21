@@ -363,7 +363,15 @@ const Session = {
     };
   },
 
+  // Generation token: incremented every time a session-changing action starts
+  // (new or load). If an older, still-in-flight load() resolves after a
+  // newer one has started, its result is discarded rather than silently
+  // overwriting the session someone has since moved on to — this is the fix
+  // for the "new session sometimes shows the previous session" bug.
+  _loadToken: 0,
+
   new(businessName, tier, complexityAnswers, complexityRec, chData, clientCode) {
+    this._loadToken++;
     const tc = TIER_CONFIG[tier] || TIER_CONFIG.standard;
     this.id = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
     this.data = {
@@ -462,7 +470,9 @@ const Session = {
   },
 
   async load(sessionId) {
+    const token = ++this._loadToken;
     const data = await SyncEngine.load(sessionId);
+    if (token !== this._loadToken) return false; // superseded by a newer load/new — discard this stale result
     if (!data) return false;
     this.id = sessionId;
     // Backwards compatibility: missing fields default gracefully
@@ -994,7 +1004,7 @@ const App = {
   showAssessment(sessionId) {
     // Bug 1 fix: always navigate to the specified session, clearing last_tab state
     LocalStore.delete('last_tab');
-    Session.load(sessionId).then(() => this._renderAssessment());
+    Session.load(sessionId).then(ok => { if (ok) this._renderAssessment(); });
   },
 
   // ── New session flow ───────────────────────────────────────────
