@@ -1330,6 +1330,7 @@ const App = {
       <div class="bottom-bar">
         <button class="btn btn-ghost" onclick="App.showSessionPicker()">← Sessions</button>
         <button class="btn btn-primary" onclick="App.generateTaskList()">Generate task list</button>
+        <button class="btn btn-secondary" style="margin-left:8px" onclick="App.generateReport()">Generate NIBEX report</button>
       </div>`;
   },
 
@@ -1521,6 +1522,184 @@ const App = {
           </div>
         </div>
       </div>`;
+  },
+
+  generateReport() {
+    const tc = TIER_CONFIG[Session.data.tier||'standard'] || TIER_CONFIG.standard;
+    const dims = DIMENSIONS.filter(d => Session.data.active_dimensions.includes(d.id));
+    const dateStr = new Date().toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
+
+    // Bucket a scored sub-element by its score, for the strengths/attention split
+    const bucketFor = (score) => {
+      if (score==='4'||score==='5') return 'strength';
+      if (score==='3') return 'functional';
+      if (score==='-1'||score==='0'||score==='1'||score==='2') return 'attention';
+      if (score==='p') return 'pending';
+      if (score==='na') return 'na';
+      return 'unscored';
+    };
+
+    const subRow = (dimId, sub) => {
+      const key = `${dimId}.${sub.id}`;
+      const score = Session.data.scores[key];
+      const meta = SCORE_META[score];
+      const notes = Session.data.notes[key]?.trim();
+      const aiReasoning = Session.data.ai_suggestions[key]?.reasoning;
+      const reasoning = notes || aiReasoning || meta?.desc || '';
+      return `<div class="report-sub-row">
+        <div class="report-sub-header">
+          <span class="report-sub-label">${sub.id} ${sub.label}</span>
+          ${meta ? `<span class="report-sub-score">${meta.label}</span>` : ''}
+        </div>
+        ${reasoning ? `<div class="report-sub-reasoning">${reasoning}</div>` : ''}
+      </div>`;
+    };
+
+    const dimensionSections = dims.map(dim => {
+      if (Session.isRedFlagDim(dim.id)) {
+        const subs = dim.subElements.map(sub => {
+          const rf = Session.data.red_flags?.[`${dim.id}.${sub.id}`];
+          const status = rf?.flagged ? 'Red flag identified' : (rf ? 'No concern identified' : 'Not yet screened');
+          return `<div class="report-sub-row">
+            <div class="report-sub-header">
+              <span class="report-sub-label">${sub.id} ${sub.label}</span>
+              <span class="report-sub-score ${rf?.flagged?'report-flag-bad':''}">${status}</span>
+            </div>
+            ${rf?.notes ? `<div class="report-sub-reasoning">${rf.notes}</div>` : ''}
+          </div>`;
+        }).join('');
+        return `<div class="report-dimension">
+          <h3>${dim.id}. ${dim.label} <span class="report-rf-badge">Red flag screen only</span></h3>
+          <p class="report-disclaimer">This dimension is outside the scope of a Foundations assessment. Findings are for ethical identification only. No remedial works will be undertaken against derelictions identified here without upgrading to Standard. If concerns are identified the client will be notified and an upgrade recommended.</p>
+          ${subs}
+        </div>`;
+      }
+
+      const buckets = { strength:[], functional:[], attention:[], pending:[], na:[], unscored:[] };
+      for (const sub of dim.subElements) {
+        const key = `${dim.id}.${sub.id}`;
+        buckets[bucketFor(Session.data.scores[key])].push(sub);
+      }
+      const ds = Session.data.dimension_scores?.[dim.id];
+
+      const section = (title, className, subs) => !subs.length ? '' : `
+        <div class="report-bucket ${className}">
+          <div class="report-bucket-title">${title}</div>
+          ${subs.map(s => subRow(dim.id, s)).join('')}
+        </div>`;
+
+      return `<div class="report-dimension">
+        <h3>${dim.id}. ${dim.label} ${ds ? `<span class="report-dim-score">${ds.score.toFixed(1)}/5${ds.hasDereliction ? ' — capped (dereliction)' : ''}</span>` : ''}</h3>
+        ${section('Strengths', 'report-bucket-strength', buckets.strength)}
+        ${section('Functional', 'report-bucket-functional', buckets.functional)}
+        ${section('Areas needing attention', 'report-bucket-attention', buckets.attention)}
+        ${section('Pending — insufficient information yet', 'report-bucket-pending', buckets.pending)}
+        ${section('Not applicable to this business', 'report-bucket-na', buckets.na)}
+      </div>`;
+    }).join('');
+
+    // Reuse the same task/red-flag gathering as the existing task list feature —
+    // kept neutral and diagnostic here, not written as a sales pitch.
+    const tasks=[], redFlagTasks=[];
+    for (const [key,task] of Object.entries(Session.data.tasks)) {
+      if (!task?.trim()) continue;
+      const [dId,sId] = key.split('.');
+      const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
+      const sub = dim?.subElements.find(s=>s.id===sId);
+      if (!sub) continue;
+      tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}</span>${task}</div>`);
+    }
+    for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
+      if (!rf?.flagged) continue;
+      const [dId,sId] = key.split('.');
+      const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
+      const sub = dim?.subElements.find(s=>s.id===sId);
+      if (!sub) continue;
+      redFlagTasks.push(`<div class="report-task report-task-flag"><span class="report-task-source">${dim.label} — ${sub.label}</span>${rf.notes||'Red flag raised — no further detail recorded.'}</div>`);
+    }
+
+    const html = `<!DOCTYPE html><html><head><title>NIBEX Report — ${Session.data.business_name}</title>
+      <style>${this._reportStylesheet()}</style></head>
+      <body>
+        <div class="report-toolbar no-print">
+          <button onclick="window.print()">Print / Save as PDF</button>
+        </div>
+        <div class="report-page">
+          <div class="report-header">
+            <div class="report-brand">NIBEX</div>
+            <div class="report-brand-sub">Nicomachea Business Assessment</div>
+          </div>
+          <h1>${Session.data.business_name}</h1>
+          <div class="report-meta">${tc.label} · ${dateStr}</div>
+
+          <div class="report-score-block">
+            <div class="report-score-number">${Session.data.nibex_score ?? '—'}<span>/100</span></div>
+            ${Session.data.tier==='foundations' ? `<div class="report-partial-note">Partial NIBEX score — based on ${tc.scoredDims.length} of 11 dimensions. The remaining dimensions were screened for red flags only, as set out below.</div>` : ''}
+          </div>
+
+          <div class="report-radar">${this._buildRadarChartSVG()}</div>
+
+          <h2>Dimension findings</h2>
+          ${dimensionSections}
+
+          <h2>Task list</h2>
+          ${tasks.length ? tasks.join('') : '<p class="report-muted">No outstanding tasks recorded.</p>'}
+          ${redFlagTasks.length ? `<h3 class="report-flag-heading">Red flags — outside current scope</h3>${redFlagTasks.join('')}` : ''}
+
+          <div class="report-footer">
+            <p><strong>Scope of this assessment:</strong> ${tc.desc}</p>
+            <p>Prepared by Nicomachea Limited. This report reflects the business's position as observed on ${dateStr} and is not a guarantee of future performance or compliance.</p>
+          </div>
+        </div>
+      </body></html>`;
+
+    const w = window.open('','_blank');
+    w?.document.write(html);
+    w?.document.close();
+  },
+
+  _reportStylesheet() {
+    return `
+      body { font-family: 'EB Garamond', Georgia, serif; color:#0f0e0c; background:#faf7f2; margin:0; }
+      .report-toolbar { position:sticky; top:0; background:#0f0e0c; padding:12px 24px; text-align:right; }
+      .report-toolbar button { background:#9a7c2e; color:#fff; border:none; padding:8px 16px; border-radius:4px; font-family:'Montserrat',sans-serif; font-size:13px; cursor:pointer; }
+      .report-page { max-width:760px; margin:0 auto; padding:40px 32px 80px; }
+      .report-header { text-align:center; margin-bottom:24px; }
+      .report-brand { font-family:'Cormorant Garamond',serif; font-size:32px; letter-spacing:2px; color:#9a7c2e; }
+      .report-brand-sub { font-family:'Montserrat',sans-serif; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#666; }
+      h1 { font-family:'Cormorant Garamond',serif; font-size:30px; text-align:center; margin:8px 0 4px; }
+      .report-meta { text-align:center; font-family:'Montserrat',sans-serif; font-size:13px; color:#666; margin-bottom:24px; }
+      .report-score-block { text-align:center; margin:24px 0; }
+      .report-score-number { font-size:48px; font-weight:600; }
+      .report-score-number span { font-size:20px; color:#666; }
+      .report-partial-note { font-family:'Montserrat',sans-serif; font-size:12px; color:#8a6d1f; max-width:480px; margin:8px auto 0; }
+      .report-radar { text-align:center; margin:24px 0; }
+      h2 { font-family:'Cormorant Garamond',serif; font-size:24px; border-bottom:2px solid #9a7c2e; padding-bottom:6px; margin-top:40px; }
+      .report-dimension { margin:24px 0; page-break-inside:avoid; }
+      .report-dimension h3 { font-size:18px; display:flex; justify-content:space-between; align-items:baseline; }
+      .report-dim-score { font-family:'Montserrat',sans-serif; font-size:13px; color:#9a7c2e; }
+      .report-rf-badge { font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; background:#f0e6c8; color:#7a5f1a; padding:2px 8px; border-radius:3px; }
+      .report-disclaimer { font-size:13px; color:#666; background:#fdf8ec; border-left:3px solid #9a7c2e; padding:8px 12px; }
+      .report-bucket { margin:10px 0; }
+      .report-bucket-title { font-family:'Montserrat',sans-serif; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+      .report-bucket-strength .report-bucket-title { color:#2e7d32; }
+      .report-bucket-attention .report-bucket-title { color:#b23b3b; }
+      .report-bucket-functional .report-bucket-title,
+      .report-bucket-pending .report-bucket-title,
+      .report-bucket-na .report-bucket-title { color:#666; }
+      .report-sub-row { padding:6px 0; border-bottom:1px solid #eee; }
+      .report-sub-header { display:flex; justify-content:space-between; font-size:14px; }
+      .report-sub-score { font-family:'Montserrat',sans-serif; font-size:11px; color:#666; }
+      .report-flag-bad { color:#b23b3b; font-weight:600; }
+      .report-sub-reasoning { font-size:13px; color:#444; margin-top:2px; }
+      .report-task { font-size:13px; border:1px solid #e5e2da; border-radius:4px; padding:8px 10px; margin-bottom:6px; }
+      .report-task-source { display:block; font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; color:#999; margin-bottom:2px; }
+      .report-task-flag { border-color:#b23b3b; background:#fef2f2; }
+      .report-flag-heading { color:#b23b3b; border-bottom-color:#b23b3b; }
+      .report-muted { color:#999; font-style:italic; }
+      .report-footer { margin-top:48px; padding-top:16px; border-top:1px solid #ccc; font-family:'Montserrat',sans-serif; font-size:11px; color:#666; }
+      @media print { .no-print { display:none; } body { background:#fff; } }
+    `;
   },
 
   generateTaskList() {
