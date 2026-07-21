@@ -275,7 +275,21 @@ const Auth = {
     SessionTimeout.stop();
   },
 
+  // If a refresh is already in flight, every other caller waits for and
+  // reuses that same attempt rather than starting its own. Necessary because
+  // Supabase rotates refresh tokens on use — two concurrent refresh calls
+  // (e.g. from several requests hitting 401 around the same moment) would
+  // otherwise race, and only the first would succeed; the second would be
+  // rejected for reusing an already-consumed refresh token.
+  _refreshPromise: null,
+
   async refresh() {
+    if (this._refreshPromise) return this._refreshPromise;
+    this._refreshPromise = this._doRefresh().finally(() => { this._refreshPromise = null; });
+    return this._refreshPromise;
+  },
+
+  async _doRefresh() {
     if (!CONFIG.supabaseUrl) return false;
     try {
       const resp = await fetch(`${CONFIG.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
