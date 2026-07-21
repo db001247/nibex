@@ -1278,3 +1278,50 @@ select {
   margin: 6px 0 10px;
   border-radius: 3px;
 }
+
+/* ── Radar chart ───────────────────────────────────────────────── */
+.radar-chart-panel {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 16px 0;
+  text-align: center;
+}
+.radar-chart-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink, #0f0e0c);
+  margin-bottom: 8px;
+  text-align: left;
+}
+.radar-chart-svg {
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+}
+.radar-grid-ring {
+  fill: none;
+  stroke: #e5e2da;
+  stroke-width: 1;
+}
+.radar-axis-line {
+  stroke: #e5e2da;
+  stroke-width: 1;
+}
+.radar-data-polygon {
+  fill: rgba(154,124,46,0.25);
+  stroke: var(--gold, #9a7c2e);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.radar-dereliction-marker {
+  fill: #b23b3b;
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.radar-label {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 10px;
+  fill: var(--ink-muted, #666);
+}

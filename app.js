@@ -794,7 +794,72 @@ const UI = {
     el.innerHTML = status==='online' ? '● Synced' : status==='offline' ? '● Offline' : '↻ Syncing…';
   },
 
+  _buildRadarChartSVG() {
+    const tc = TIER_CONFIG[Session.data.tier||'standard'] || TIER_CONFIG.standard;
+    const dims = DIMENSIONS.filter(d => tc.scoredDims.includes(d.id));
+    const n = dims.length;
+    if (n < 3) return ''; // not enough axes to draw a meaningful shape (e.g. mid-flow edge cases)
+
+    const cx = 160, cy = 160, maxR = 110;
+    const angleFor = i => -Math.PI/2 + i * (2*Math.PI/n);
+    const pointAt = (i, r) => {
+      const a = angleFor(i);
+      return [cx + r*Math.cos(a), cy + r*Math.sin(a)];
+    };
+
+    // Grid rings at each score level 1–5, drawn as concentric polygons matching the axis count
+    const gridRings = [1,2,3,4,5].map(level => {
+      const r = (level/5)*maxR;
+      const pts = dims.map((_,i) => pointAt(i,r).join(',')).join(' ');
+      return `<polygon points="${pts}" class="radar-grid-ring" />`;
+    }).join('');
+
+    // Axis lines from centre to each dimension's outer point
+    const axisLines = dims.map((_,i) => {
+      const [x,y] = pointAt(i,maxR);
+      return `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" class="radar-axis-line" />`;
+    }).join('');
+
+    // Labels, positioned just beyond the outer ring
+    const labels = dims.map((d,i) => {
+      const [x,y] = pointAt(i,maxR+22);
+      return `<text x="${x}" y="${y}" class="radar-label" text-anchor="middle" dominant-baseline="middle">${d.shortLabel}</text>`;
+    }).join('');
+
+    // Actual data polygon — a dimension with no score yet sits at the centre (r=0),
+    // so an in-progress assessment visibly shows as a partially-formed shape
+    // rather than guessing or hiding incomplete dimensions.
+    const dataPoints = dims.map((d,i) => {
+      const ds = Session.data.dimension_scores?.[d.id];
+      const r = ds ? (ds.score/5)*maxR : 0;
+      return pointAt(i,r);
+    });
+    const dataPolygon = dataPoints.map(p=>p.join(',')).join(' ');
+
+    // Small red marker on any dimension currently capped by an unresolved dereliction
+    const derelictionMarkers = dims.map((d,i) => {
+      const ds = Session.data.dimension_scores?.[d.id];
+      if (!ds?.hasDereliction) return '';
+      const [x,y] = dataPoints[i];
+      return `<circle cx="${x}" cy="${y}" r="5" class="radar-dereliction-marker" />`;
+    }).join('');
+
+    return `
+      <div class="radar-chart-title">NIBEX Profile</div>
+      <svg viewBox="0 0 320 320" class="radar-chart-svg">
+        ${gridRings}
+        ${axisLines}
+        <polygon points="${dataPolygon}" class="radar-data-polygon" />
+        ${derelictionMarkers}
+        ${labels}
+      </svg>
+    `;
+  },
+
   updateNibexBanner() {
+    const radarEl = document.getElementById('radar-chart-container');
+    if (radarEl) radarEl.innerHTML = this._buildRadarChartSVG();
+
     const scoreEl = document.getElementById('nibex-score');
     if (!scoreEl) return;
     scoreEl.textContent = Session.data.nibex_score !== null ? Session.data.nibex_score : '—';
@@ -1244,6 +1309,8 @@ const App = {
         </div>
 
         <div id="staff-registry-modal" style="display:none"></div>
+
+        <div id="radar-chart-container" class="radar-chart-panel"></div>
 
         <div id="ceiling-warning" class="ceiling-warning" style="display:none">
           ⚠ One or more dimensions have dereliction flags. Affected dimension scores are capped at 2 until resolved.
