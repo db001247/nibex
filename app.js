@@ -1681,6 +1681,13 @@ const App = {
   },
 
   async generateReport() {
+    // Open the tab immediately, synchronously, as a direct response to the
+    // click — browsers silently block window.open() if it happens even
+    // slightly later (e.g. after an await), which is what caused this to
+    // appear to do nothing. We write the actual content in once ready.
+    const w = window.open('', '_blank');
+    if (w) w.document.write('<p style="font-family:sans-serif;padding:40px;color:#666">Generating report…</p>');
+
     const snapshot = this._buildReportSnapshot();
 
     // Save the locked snapshot first — if this fails, we don't want to show
@@ -1699,17 +1706,21 @@ const App = {
       });
       if (!r.ok) {
         alert('Could not save this report as a permanent record — check your connection and try again. No report was generated.');
+        w?.close();
         return;
       }
     } catch(e) {
       alert('Could not save this report as a permanent record — check your connection and try again. No report was generated.');
+      w?.close();
       return;
     }
 
     const html = this._buildReportHTML(snapshot);
-    const w = window.open('','_blank');
-    w?.document.write(html);
-    w?.document.close();
+    if (w) {
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+    }
   },
 
   // ── Past reports ────────────────────────────────────────────────
@@ -1734,16 +1745,23 @@ const App = {
   },
 
   async _openSavedReport(reportId) {
+    const w = window.open('', '_blank');
+    if (w) w.document.write('<p style="font-family:sans-serif;padding:40px;color:#666">Loading report…</p>');
     try {
       const r = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_reports?id=eq.${encodeURIComponent(reportId)}&select=snapshot`, {});
-      if (!r.ok) { alert('Could not load that report.'); return; }
+      if (!r.ok) { alert('Could not load that report.'); w?.close(); return; }
       const rows = await r.json();
-      if (!rows.length) { alert('Report not found.'); return; }
+      if (!rows.length) { alert('Report not found.'); w?.close(); return; }
       const html = this._buildReportHTML(rows[0].snapshot);
-      const w = window.open('','_blank');
-      w?.document.write(html);
-      w?.document.close();
-    } catch(e) { alert('Could not load that report.'); }
+      if (w) {
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+      }
+    } catch(e) {
+      alert('Could not load that report.');
+      w?.close();
+    }
   },
 
   _reportStylesheet() {
