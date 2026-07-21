@@ -794,8 +794,9 @@ const UI = {
     el.innerHTML = status==='online' ? '● Synced' : status==='offline' ? '● Offline' : '↻ Syncing…';
   },
 
-  _buildRadarChartSVG() {
-    const tc = TIER_CONFIG[Session.data.tier||'standard'] || TIER_CONFIG.standard;
+  _buildRadarChartSVG(data) {
+    data = data || Session.data;
+    const tc = TIER_CONFIG[data.tier||'standard'] || TIER_CONFIG.standard;
     const dims = DIMENSIONS.filter(d => tc.scoredDims.includes(d.id));
     const n = dims.length;
     if (n < 3) return ''; // not enough axes to draw a meaningful shape (e.g. mid-flow edge cases)
@@ -830,7 +831,7 @@ const UI = {
     // so an in-progress assessment visibly shows as a partially-formed shape
     // rather than guessing or hiding incomplete dimensions.
     const dataPoints = dims.map((d,i) => {
-      const ds = Session.data.dimension_scores?.[d.id];
+      const ds = data.dimension_scores?.[d.id];
       const r = ds ? (ds.score/5)*maxR : 0;
       return pointAt(i,r);
     });
@@ -838,7 +839,7 @@ const UI = {
 
     // Small red marker on any dimension currently capped by an unresolved dereliction
     const derelictionMarkers = dims.map((d,i) => {
-      const ds = Session.data.dimension_scores?.[d.id];
+      const ds = data.dimension_scores?.[d.id];
       if (!ds?.hasDereliction) return '';
       const [x,y] = dataPoints[i];
       return `<circle cx="${x}" cy="${y}" r="5" class="radar-dereliction-marker" />`;
@@ -1331,6 +1332,7 @@ const App = {
         <button class="btn btn-ghost" onclick="App.showSessionPicker()">← Sessions</button>
         <button class="btn btn-primary" onclick="App.generateTaskList()">Generate task list</button>
         <button class="btn btn-secondary" style="margin-left:8px" onclick="App.generateReport()">Generate NIBEX report</button>
+        <button class="btn btn-ghost" style="margin-left:8px" onclick="App.viewPastReports()">Past reports</button>
       </div>`;
   },
 
@@ -1524,10 +1526,10 @@ const App = {
       </div>`;
   },
 
-  generateReport() {
-    const tc = TIER_CONFIG[Session.data.tier||'standard'] || TIER_CONFIG.standard;
-    const dims = DIMENSIONS.filter(d => Session.data.active_dimensions.includes(d.id));
-    const dateStr = new Date().toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
+  _buildReportHTML(data) {
+    const tc = TIER_CONFIG[data.tier||'standard'] || TIER_CONFIG.standard;
+    const dims = DIMENSIONS.filter(d => data.active_dimensions.includes(d.id));
+    const dateStr = new Date(data.generated_at || Date.now()).toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
 
     // Bucket a scored sub-element by its score, for the strengths/attention split
     const bucketFor = (score) => {
@@ -1541,10 +1543,10 @@ const App = {
 
     const subRow = (dimId, sub) => {
       const key = `${dimId}.${sub.id}`;
-      const score = Session.data.scores[key];
+      const score = data.scores[key];
       const meta = SCORE_META[score];
-      const notes = Session.data.notes[key]?.trim();
-      const aiReasoning = Session.data.ai_suggestions[key]?.reasoning;
+      const notes = data.notes[key]?.trim();
+      const aiReasoning = data.ai_suggestions[key]?.reasoning;
       const reasoning = notes || aiReasoning || meta?.desc || '';
       return `<div class="report-sub-row">
         <div class="report-sub-header">
@@ -1558,7 +1560,7 @@ const App = {
     const dimensionSections = dims.map(dim => {
       if (Session.isRedFlagDim(dim.id)) {
         const subs = dim.subElements.map(sub => {
-          const rf = Session.data.red_flags?.[`${dim.id}.${sub.id}`];
+          const rf = data.red_flags?.[`${dim.id}.${sub.id}`];
           const status = rf?.flagged ? 'Red flag identified' : (rf ? 'No concern identified' : 'Not yet screened');
           return `<div class="report-sub-row">
             <div class="report-sub-header">
@@ -1578,9 +1580,9 @@ const App = {
       const buckets = { strength:[], functional:[], attention:[], pending:[], na:[], unscored:[] };
       for (const sub of dim.subElements) {
         const key = `${dim.id}.${sub.id}`;
-        buckets[bucketFor(Session.data.scores[key])].push(sub);
+        buckets[bucketFor(data.scores[key])].push(sub);
       }
-      const ds = Session.data.dimension_scores?.[dim.id];
+      const ds = data.dimension_scores?.[dim.id];
 
       const section = (title, className, subs) => !subs.length ? '' : `
         <div class="report-bucket ${className}">
@@ -1601,7 +1603,7 @@ const App = {
     // Reuse the same task/red-flag gathering as the existing task list feature —
     // kept neutral and diagnostic here, not written as a sales pitch.
     const tasks=[], redFlagTasks=[];
-    for (const [key,task] of Object.entries(Session.data.tasks)) {
+    for (const [key,task] of Object.entries(data.tasks)) {
       if (!task?.trim()) continue;
       const [dId,sId] = key.split('.');
       const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
@@ -1609,7 +1611,7 @@ const App = {
       if (!sub) continue;
       tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}</span>${task}</div>`);
     }
-    for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
+    for (const [key,rf] of Object.entries(data.red_flags||{})) {
       if (!rf?.flagged) continue;
       const [dId,sId] = key.split('.');
       const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
@@ -1618,7 +1620,11 @@ const App = {
       redFlagTasks.push(`<div class="report-task report-task-flag"><span class="report-task-source">${dim.label} — ${sub.label}</span>${rf.notes||'Red flag raised — no further detail recorded.'}</div>`);
     }
 
-    const html = `<!DOCTYPE html><html><head><title>NIBEX Report — ${Session.data.business_name}</title>
+    const lockedNotice = data.generated_at
+      ? `<div class="report-locked-notice">This is a locked record, generated ${dateStr}. It will not change even if the assessment is later updated — a new report would be generated separately for that.</div>`
+      : '';
+
+    return `<!DOCTYPE html><html><head><title>NIBEX Report — ${data.business_name}</title>
       <style>${this._reportStylesheet()}</style></head>
       <body>
         <div class="report-toolbar no-print">
@@ -1629,15 +1635,16 @@ const App = {
             <div class="report-brand">NIBEX</div>
             <div class="report-brand-sub">Nicomachea Business Assessment</div>
           </div>
-          <h1>${Session.data.business_name}</h1>
+          <h1>${data.business_name}</h1>
           <div class="report-meta">${tc.label} · ${dateStr}</div>
+          ${lockedNotice}
 
           <div class="report-score-block">
-            <div class="report-score-number">${Session.data.nibex_score ?? '—'}<span>/100</span></div>
-            ${Session.data.tier==='foundations' ? `<div class="report-partial-note">Partial NIBEX score — based on ${tc.scoredDims.length} of 11 dimensions. The remaining dimensions were screened for red flags only, as set out below.</div>` : ''}
+            <div class="report-score-number">${data.nibex_score ?? '—'}<span>/100</span></div>
+            ${data.tier==='foundations' ? `<div class="report-partial-note">Partial NIBEX score — based on ${tc.scoredDims.length} of 11 dimensions. The remaining dimensions were screened for red flags only, as set out below.</div>` : ''}
           </div>
 
-          <div class="report-radar">${this._buildRadarChartSVG()}</div>
+          <div class="report-radar">${this._buildRadarChartSVG(data)}</div>
 
           <h2>Dimension findings</h2>
           ${dimensionSections}
@@ -1652,15 +1659,97 @@ const App = {
           </div>
         </div>
       </body></html>`;
+  },
 
+  // Builds a plain snapshot object from the live session — everything
+  // needed to redraw this exact report later, independent of anything
+  // that happens to the session afterward.
+  _buildReportSnapshot() {
+    return {
+      business_name: Session.data.business_name,
+      tier: Session.data.tier,
+      active_dimensions: Session.data.active_dimensions,
+      scores: Session.data.scores,
+      notes: Session.data.notes,
+      ai_suggestions: Session.data.ai_suggestions,
+      red_flags: Session.data.red_flags,
+      tasks: Session.data.tasks,
+      dimension_scores: Session.data.dimension_scores,
+      nibex_score: Session.data.nibex_score,
+      generated_at: new Date().toISOString(),
+    };
+  },
+
+  async generateReport() {
+    const snapshot = this._buildReportSnapshot();
+
+    // Save the locked snapshot first — if this fails, we don't want to show
+    // a report that was never actually recorded anywhere.
+    try {
+      const r = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_reports`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Prefer':'return=representation' },
+        body: JSON.stringify({
+          session_id: Session.id,
+          client_code: Session.data.client_code,
+          business_name: Session.data.business_name,
+          tier: Session.data.tier,
+          snapshot,
+        }),
+      });
+      if (!r.ok) {
+        alert('Could not save this report as a permanent record — check your connection and try again. No report was generated.');
+        return;
+      }
+    } catch(e) {
+      alert('Could not save this report as a permanent record — check your connection and try again. No report was generated.');
+      return;
+    }
+
+    const html = this._buildReportHTML(snapshot);
     const w = window.open('','_blank');
     w?.document.write(html);
     w?.document.close();
   },
 
+  // ── Past reports ────────────────────────────────────────────────
+  async viewPastReports() {
+    if (!Session.data.client_code) { alert('No client code on this session yet.'); return; }
+    let reports = [];
+    try {
+      const r = await SyncEngine._fetch(
+        `${CONFIG.supabaseUrl}/rest/v1/nibex_reports?client_code=eq.${encodeURIComponent(Session.data.client_code)}&select=id,generated_at,tier&order=generated_at.desc`, {}
+      );
+      if (r.ok) reports = await r.json();
+    } catch(e) { console.error('Could not load past reports:', e); }
+
+    if (!reports.length) { alert('No past reports have been generated for this business yet.'); return; }
+
+    const list = reports.map(rep => {
+      const d = new Date(rep.generated_at).toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+      return `${d} — ${TIER_CONFIG[rep.tier]?.label || rep.tier} (ID: ${rep.id})`;
+    }).join('\n');
+    const chosenId = prompt(`Past reports for this business:\n\n${list}\n\nPaste the ID of the report you want to open:`);
+    if (chosenId) this._openSavedReport(chosenId.trim());
+  },
+
+  async _openSavedReport(reportId) {
+    try {
+      const r = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_reports?id=eq.${encodeURIComponent(reportId)}&select=snapshot`, {});
+      if (!r.ok) { alert('Could not load that report.'); return; }
+      const rows = await r.json();
+      if (!rows.length) { alert('Report not found.'); return; }
+      const html = this._buildReportHTML(rows[0].snapshot);
+      const w = window.open('','_blank');
+      w?.document.write(html);
+      w?.document.close();
+    } catch(e) { alert('Could not load that report.'); }
+  },
+
   _reportStylesheet() {
     return `
       body { font-family: 'EB Garamond', Georgia, serif; color:#0f0e0c; background:#faf7f2; margin:0; }
+      .report-locked-notice { text-align:center; font-family:'Montserrat',sans-serif; font-size:11px; color:#666; background:#f0ede6; border-radius:4px; padding:8px 16px; margin:0 auto 16px; max-width:480px; }
       .report-toolbar { position:sticky; top:0; background:#0f0e0c; padding:12px 24px; text-align:right; }
       .report-toolbar button { background:#9a7c2e; color:#fff; border:none; padding:8px 16px; border-radius:4px; font-family:'Montserrat',sans-serif; font-size:13px; cursor:pointer; }
       .report-page { max-width:760px; margin:0 auto; padding:40px 32px 80px; }
