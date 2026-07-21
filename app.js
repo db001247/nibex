@@ -1768,6 +1768,13 @@ const App = {
     return `
       body { font-family: 'EB Garamond', Georgia, serif; color:#0f0e0c; background:#faf7f2; margin:0; }
       .report-locked-notice { text-align:center; font-family:'Montserrat',sans-serif; font-size:11px; color:#666; background:#f0ede6; border-radius:4px; padding:8px 16px; margin:0 auto 16px; max-width:480px; }
+      .radar-chart-svg { width:100%; max-width:420px; height:auto; }
+      .radar-grid-ring { fill:none; stroke:#e5e2da; stroke-width:1; }
+      .radar-axis-line { stroke:#e5e2da; stroke-width:1; }
+      .radar-data-polygon { fill:rgba(154,124,46,0.25); stroke:#9a7c2e; stroke-width:2; stroke-linejoin:round; }
+      .radar-dereliction-marker { fill:#b23b3b; stroke:#fff; stroke-width:1.5; }
+      .radar-label { font-family:'Montserrat',sans-serif; font-size:10px; fill:#666; }
+      .radar-chart-title { font-family:'Cormorant Garamond',serif; font-size:18px; font-weight:600; color:#0f0e0c; margin-bottom:8px; }
       .report-toolbar { position:sticky; top:0; background:#0f0e0c; padding:12px 24px; text-align:right; }
       .report-toolbar button { background:#9a7c2e; color:#fff; border:none; padding:8px 16px; border-radius:4px; font-family:'Montserrat',sans-serif; font-size:13px; cursor:pointer; }
       .report-page { max-width:760px; margin:0 auto; padding:40px 32px 80px; }
