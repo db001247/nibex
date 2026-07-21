@@ -1644,7 +1644,7 @@ const App = {
             ${data.tier==='foundations' ? `<div class="report-partial-note">Partial NIBEX score — based on ${tc.scoredDims.length} of 11 dimensions. The remaining dimensions were screened for red flags only, as set out below.</div>` : ''}
           </div>
 
-          <div class="report-radar">${this._buildRadarChartSVG(data)}</div>
+          <div class="report-radar">${UI._buildRadarChartSVG(data)}</div>
 
           <h2>Dimension findings</h2>
           ${dimensionSections}
