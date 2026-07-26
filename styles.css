@@ -1325,3 +1325,11 @@ select {
   font-size: 10px;
   fill: var(--ink-muted, #666);
 }
+
+/* ── Root cause field ─────────────────────────────────────────── */
+.field-hint {
+  font-size: 11px;
+  color: var(--ink-muted, #7a7470);
+  margin-top: 4px;
+  line-height: 1.4;
+}
