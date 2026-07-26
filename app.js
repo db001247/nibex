@@ -355,7 +355,7 @@ const Session = {
     business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-    ai_suggestions:{}, red_flags:{},
+    ai_suggestions:{}, red_flags:{}, root_causes:{},
     complexity_answers:{}, complexity_recommendation:null,
     companies_house_data:null,
     upgrade_history:[], foundations_credit_recorded:false,
@@ -368,7 +368,7 @@ const Session = {
       business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-      ai_suggestions:{}, red_flags:{},
+      ai_suggestions:{}, red_flags:{}, root_causes:{},
       complexity_answers:{}, complexity_recommendation:null,
       companies_house_data:null,
       upgrade_history:[], foundations_credit_recorded:false,
@@ -419,6 +419,7 @@ const Session = {
   setEvidence(dimId, subId, val)  { this.data.evidence_basis[`${dimId}.${subId}`]=val; this.save(); },
   setEvidenceReviewed(dimId, subId, val) { if(!this.data.evidence_reviewed) this.data.evidence_reviewed={}; this.data.evidence_reviewed[`${dimId}.${subId}`]=val; this.save(); },
   setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
+  setRootCause(dimId, subId, val) { if(!this.data.root_causes) this.data.root_causes={}; this.data.root_causes[`${dimId}.${subId}`]=val; this.save(); },
 
   setRedFlag(dimId, subId, flagged, notes) {
     if(!this.data.red_flags) this.data.red_flags={};
@@ -792,6 +793,18 @@ const UI = {
     if (!el) return;
     el.className = `sync-indicator sync-${status}`;
     el.innerHTML = status==='online' ? '● Synced' : status==='offline' ? '● Offline' : '↻ Syncing…';
+  },
+
+  _rootCauseOptionsHTML(excludeKey, selectedVal) {
+    return DIMENSIONS.map(dim => {
+      const opts = dim.subElements
+        .filter(sub => `${dim.id}.${sub.id}` !== excludeKey)
+        .map(sub => {
+          const val = `${dim.id}.${sub.id}`;
+          return `<option value="${val}" ${selectedVal===val?'selected':''}>${dim.id}.${sub.id} ${sub.label}</option>`;
+        }).join('');
+      return `<optgroup label="${dim.id}. ${dim.label}">${opts}</optgroup>`;
+    }).join('');
   },
 
   _buildRadarChartSVG(data) {
@@ -1422,6 +1435,7 @@ const App = {
     const currentTasks    = Session.data.tasks[key]           || '';
     const currentEvidence = Session.data.evidence_basis[key]  || '';
     const currentER       = Session.data.evidence_reviewed?.[key] || '';
+    const currentRootCause = Session.data.root_causes?.[key] || '';
     const tier = Session.data.tier || 'standard';
     const hasDereliction = !!getDerelictionClause(sub.scoringCriteria);
 
@@ -1508,6 +1522,15 @@ const App = {
             <textarea id="tasks-${dimId}-${sub.id}"
               placeholder="List any actions required to address gaps or improve this sub-element…"
               oninput="Session.setTasks(${dimId},'${sub.id}',this.value)">${currentTasks}</textarea>
+          </div>
+
+          <div class="field-group root-cause-field">
+            <label class="field-label">Root cause (optional)</label>
+            <select id="rootcause-${dimId}-${sub.id}" onchange="Session.setRootCause(${dimId},'${sub.id}',this.value)">
+              <option value="">— not linked to another sub-element —</option>
+              ${UI._rootCauseOptionsHTML(key, currentRootCause)}
+            </select>
+            <div class="field-hint">If this score is really a symptom of an issue elsewhere (e.g. a documentation gap caused by a culture problem), link it here rather than treating it as unrelated.</div>
           </div>
 
           <div class="evidence-section field-group">
@@ -1609,7 +1632,16 @@ const App = {
       const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
       const sub = dim?.subElements.find(s=>s.id===sId);
       if (!sub) continue;
-      tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}</span>${task}</div>`);
+      const scoreMeta = SCORE_META[data.scores[key]];
+      const rootCauseKey = data.root_causes?.[key];
+      let rootCauseLabel = null;
+      if (rootCauseKey) {
+        const [rdId,rsId] = rootCauseKey.split('.');
+        const rDim = DIMENSIONS.find(d=>d.id===parseInt(rdId));
+        const rSub = rDim?.subElements.find(s=>s.id===rsId);
+        if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
+      }
+      tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${task}${rootCauseLabel ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}</div>` : ''}</div>`);
     }
     for (const [key,rf] of Object.entries(data.red_flags||{})) {
       if (!rf?.flagged) continue;
@@ -1674,6 +1706,7 @@ const App = {
       ai_suggestions: Session.data.ai_suggestions,
       red_flags: Session.data.red_flags,
       tasks: Session.data.tasks,
+      root_causes: Session.data.root_causes,
       dimension_scores: Session.data.dimension_scores,
       nibex_score: Session.data.nibex_score,
       generated_at: new Date().toISOString(),
@@ -1807,6 +1840,7 @@ const App = {
       .report-flag-bad { color:#b23b3b; font-weight:600; }
       .report-sub-reasoning { font-size:13px; color:#444; margin-top:2px; }
       .report-task { font-size:13px; border:1px solid #e5e2da; border-radius:4px; padding:8px 10px; margin-bottom:6px; }
+      .report-task-rootcause { font-size:11px; color:#9a7c2e; margin-top:6px; }
       .report-task-source { display:block; font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; color:#999; margin-bottom:2px; }
       .report-task-flag { border-color:#b23b3b; background:#fef2f2; }
       .report-flag-heading { color:#b23b3b; border-bottom-color:#b23b3b; }
@@ -1824,7 +1858,17 @@ const App = {
       const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
       const sub = dim?.subElements.find(s=>s.id===sId);
       if (!sub) continue;
-      tasks.push({dimension:dim.label,subElement:sub.label,task,score:Session.data.scores[key]});
+      const score = Session.data.scores[key];
+      const meta = SCORE_META[score];
+      const rootCauseKey = Session.data.root_causes?.[key];
+      let rootCauseLabel = null;
+      if (rootCauseKey) {
+        const [rdId,rsId] = rootCauseKey.split('.');
+        const rDim = DIMENSIONS.find(d=>d.id===parseInt(rdId));
+        const rSub = rDim?.subElements.find(s=>s.id===rsId);
+        if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
+      }
+      tasks.push({dimension:dim.label,subElement:sub.label,task,score,scoreLabel:meta?.label,rootCauseLabel});
     }
     for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
       if (!rf?.flagged) continue;
@@ -1838,8 +1882,9 @@ const App = {
     const html = `<div style="padding:16px;font-family:Georgia,serif">
       <h2 style="font-size:22px;margin-bottom:16px">Task list — ${Session.data.business_name}</h2>
       ${tasks.map(t=>`<div style="border:0.5px solid #d4c9b4;padding:12px;margin-bottom:8px;border-radius:4px">
-        <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${t.dimension} — ${t.subElement}</div>
-        <div>${t.task}</div></div>`).join('')}
+        <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${t.dimension} — ${t.subElement}${t.scoreLabel ? ` · Scored: ${t.scoreLabel}` : ''}</div>
+        <div>${t.task}</div>
+        ${t.rootCauseLabel ? `<div style="font-size:11px;color:#9a7c2e;margin-top:6px">↳ Root cause: linked to ${t.rootCauseLabel}</div>` : ''}</div>`).join('')}
       ${redFlags.length?`<h3 style="font-size:18px;margin:20px 0 12px;color:#b91c1c">Red flags — outside Foundations scope</h3>
         ${redFlags.map(r=>`<div style="border:0.5px solid #b91c1c;padding:12px;margin-bottom:8px;border-radius:4px;background:#fef2f2">
           <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${r.dimension} — ${r.subElement}</div>
