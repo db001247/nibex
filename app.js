@@ -847,8 +847,8 @@ const UI = {
     const roleField = (role, label, placeholder) => `
       <div class="raci-role">
         <label class="field-label">${label}</label>
-        <input type="text" value="${(r[role]||'').replace(/"/g,'&quot;')}" placeholder="${placeholder}"
-          oninput="Session.setRaci('${key}','${role}',this.value)">
+        <textarea placeholder="${placeholder}"
+          oninput="Session.setRaci('${key}','${role}',this.value)">${r[role]||''}</textarea>
       </div>`;
     return `
       <div class="field-group raci-field">
@@ -1681,13 +1681,14 @@ const App = {
       const reasoning = notes || aiReasoning || meta?.desc || '';
 
       const raci = data.raci?.[key];
+      const nl2br = t => t ? t.replace(/\n/g,'<br>') : t;
       const raciHTML = raci && (raci.responsible||raci.accountable||raci.consulted||raci.informed)
         ? `<div class="report-raci">
             <div class="report-raci-title">RACI</div>
-            ${raci.responsible ? `<div><strong>Responsible:</strong> ${raci.responsible}</div>` : ''}
-            ${raci.accountable ? `<div><strong>Accountable:</strong> ${raci.accountable}</div>` : ''}
-            ${raci.consulted ? `<div><strong>Consulted:</strong> ${raci.consulted}</div>` : ''}
-            ${raci.informed ? `<div><strong>Informed:</strong> ${raci.informed}</div>` : ''}
+            ${raci.responsible ? `<div><strong>Responsible:</strong> ${nl2br(raci.responsible)}</div>` : ''}
+            ${raci.accountable ? `<div><strong>Accountable:</strong> ${nl2br(raci.accountable)}</div>` : ''}
+            ${raci.consulted ? `<div><strong>Consulted:</strong> ${nl2br(raci.consulted)}</div>` : ''}
+            ${raci.informed ? `<div><strong>Informed:</strong> ${nl2br(raci.informed)}</div>` : ''}
           </div>`
         : '';
 

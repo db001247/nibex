@@ -1441,8 +1441,9 @@ select {
   gap: 10px;
   margin-top: 8px;
 }
-.raci-role input {
+.raci-role textarea {
   width: 100%;
+  min-height: 44px;
   padding: 8px;
   border: 0.5px solid var(--rule, #d4c9b4);
   border-radius: 4px;
