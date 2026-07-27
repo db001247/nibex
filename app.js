@@ -369,7 +369,7 @@ const Session = {
     business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{},
+    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{}, raci:{}, process_maps:{},
     complexity_answers:{}, complexity_recommendation:null,
     companies_house_data:null,
     upgrade_history:[], foundations_credit_recorded:false,
@@ -382,7 +382,7 @@ const Session = {
       business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{},
+      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{}, raci:{}, process_maps:{},
       complexity_answers:{}, complexity_recommendation:null,
       companies_house_data:null,
       upgrade_history:[], foundations_credit_recorded:false,
@@ -432,6 +432,8 @@ const Session = {
   setTasks(dimId, subId, text)    { this.data.tasks[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
   setTaskLinePriority(lineKey, priority) { if(!this.data.task_line_priorities) this.data.task_line_priorities={}; this.data.task_line_priorities[lineKey]=priority; this.save(); },
   setToBeNote(dimId, text) { if(!this.data.to_be_notes) this.data.to_be_notes={}; this.data.to_be_notes[dimId]=text; this.save(); },
+  setRaci(key, role, value) { if(!this.data.raci) this.data.raci={}; if(!this.data.raci[key]) this.data.raci[key]={}; this.data.raci[key][role]=value; this.save(); },
+  setProcessMap(key, text) { if(!this.data.process_maps) this.data.process_maps={}; this.data.process_maps[key]=text; this.save(); },
   setEvidence(dimId, subId, val)  { this.data.evidence_basis[`${dimId}.${subId}`]=val; this.save(); },
   setEvidenceReviewed(dimId, subId, val) { if(!this.data.evidence_reviewed) this.data.evidence_reviewed={}; this.data.evidence_reviewed[`${dimId}.${subId}`]=val; this.save(); },
   setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
@@ -833,6 +835,48 @@ const UI = {
       el.selectionStart = el.selectionEnd = el.value.length;
     }
     Session.setTasks(dimId, subId, el.value);
+  },
+
+  // RACI (Responsible, Accountable, Consulted, Informed) — specifically for
+  // 5.2 (Key Person Dependency) and 7.2 (Role Definition and Clarity), where
+  // mapping who actually does what produces a genuinely useful standalone
+  // artefact for the client, not just a numeric score of "this is unclear".
+  _buildRaciFieldHTML(dimId, subId) {
+    const key = `${dimId}.${subId}`;
+    const r = Session.data.raci?.[key] || {};
+    const roleField = (role, label, placeholder) => `
+      <div class="raci-role">
+        <label class="field-label">${label}</label>
+        <input type="text" value="${(r[role]||'').replace(/"/g,'&quot;')}" placeholder="${placeholder}"
+          oninput="Session.setRaci('${key}','${role}',this.value)">
+      </div>`;
+    return `
+      <div class="field-group raci-field">
+        <label class="field-label">RACI — who does what for this business's key function or decision?</label>
+        <div class="field-hint">Name the specific function or decision this covers, then map who is Responsible (does the work), Accountable (answerable for the outcome), Consulted (asked for input), and Informed (kept in the loop).</div>
+        <div class="raci-grid">
+          ${roleField('responsible', 'Responsible', 'Who does the work')}
+          ${roleField('accountable', 'Accountable', 'Who is answerable')}
+          ${roleField('consulted', 'Consulted', 'Who is asked for input')}
+          ${roleField('informed', 'Informed', 'Who is kept informed')}
+        </div>
+      </div>`;
+  },
+
+  // Process mapping — specifically for 6.1 (Core Process Documentation).
+  // A lightweight, text-based process map: what happens, who does it, where
+  // it stalls — more useful to a client than a bare score of whether
+  // documentation exists at all.
+  _buildProcessMapFieldHTML(dimId, subId) {
+    const key = `${dimId}.${subId}`;
+    const current = Session.data.process_maps?.[key] || '';
+    return `
+      <div class="field-group process-map-field">
+        <label class="field-label">Process map (optional)</label>
+        <div class="field-hint">Map the actual process, step by step: what happens, who does it, and where it typically stalls or breaks down.</div>
+        <textarea placeholder="e.g. 1. Customer enquires by phone (owner answers) → 2. Quote given verbally, no record kept → 3. Job booked in paper diary — this is where things go missing if owner is away…"
+          oninput="Session.setProcessMap('${key}',this.value)">${current}</textarea>
+      </div>`;
   },
 
   toggleRootCauseChallenge(dimId, subId, val) {
@@ -1538,6 +1582,9 @@ const App = {
               oninput="Session.setNotes(${dimId},'${sub.id}',this.value)">${currentNotes}</textarea>
           </div>
 
+          ${(key === '5.2' || key === '7.2') ? UI._buildRaciFieldHTML(dimId, sub.id) : ''}
+          ${key === '6.1' ? UI._buildProcessMapFieldHTML(dimId, sub.id) : ''}
+
           ${showER ? `
           <div class="field-group er-field">
             <label class="field-label"><span class="er-badge">Complete</span> Evidence reviewed</label>
@@ -1632,12 +1679,31 @@ const App = {
       const notes = data.notes[key]?.trim();
       const aiReasoning = data.ai_suggestions[key]?.reasoning;
       const reasoning = notes || aiReasoning || meta?.desc || '';
+
+      const raci = data.raci?.[key];
+      const raciHTML = raci && (raci.responsible||raci.accountable||raci.consulted||raci.informed)
+        ? `<div class="report-raci">
+            <div class="report-raci-title">RACI</div>
+            ${raci.responsible ? `<div><strong>Responsible:</strong> ${raci.responsible}</div>` : ''}
+            ${raci.accountable ? `<div><strong>Accountable:</strong> ${raci.accountable}</div>` : ''}
+            ${raci.consulted ? `<div><strong>Consulted:</strong> ${raci.consulted}</div>` : ''}
+            ${raci.informed ? `<div><strong>Informed:</strong> ${raci.informed}</div>` : ''}
+          </div>`
+        : '';
+
+      const processMap = data.process_maps?.[key];
+      const processMapHTML = processMap
+        ? `<div class="report-process-map"><div class="report-process-map-title">Process map</div>${processMap.replace(/\n/g,'<br>')}</div>`
+        : '';
+
       return `<div class="report-sub-row">
         <div class="report-sub-header">
           <span class="report-sub-label">${sub.id} ${sub.label}</span>
           ${meta ? `<span class="report-sub-score">${meta.label}</span>` : ''}
         </div>
         ${reasoning ? `<div class="report-sub-reasoning">${reasoning}</div>` : ''}
+        ${raciHTML}
+        ${processMapHTML}
       </div>`;
     };
 
@@ -1799,6 +1865,8 @@ const App = {
       root_cause_challenges: Session.data.root_cause_challenges,
       task_line_priorities: Session.data.task_line_priorities,
       to_be_notes: Session.data.to_be_notes,
+      raci: Session.data.raci,
+      process_maps: Session.data.process_maps,
       dimension_scores: Session.data.dimension_scores,
       nibex_score: Session.data.nibex_score,
       generated_at: new Date().toISOString(),
@@ -1933,6 +2001,9 @@ const App = {
       .report-sub-score { font-family:'Montserrat',sans-serif; font-size:11px; color:#666; }
       .report-flag-bad { color:#b23b3b; font-weight:600; }
       .report-sub-reasoning { font-size:13px; color:#444; margin-top:2px; }
+      .report-raci { font-size:12px; color:#444; background:#faf7f2; border-radius:4px; padding:8px 10px; margin-top:6px; }
+      .report-raci-title, .report-process-map-title { font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; color:#9a7c2e; font-weight:600; margin-bottom:4px; }
+      .report-process-map { font-size:12px; color:#444; background:#faf7f2; border-radius:4px; padding:8px 10px; margin-top:6px; line-height:1.6; }
       .report-task { font-size:13px; border:1px solid #e5e2da; border-radius:4px; padding:8px 10px; margin-bottom:6px; }
       .report-task-rootcause { font-size:11px; color:#9a7c2e; margin-top:6px; }
       .report-task-challenge { color:#7a7470; }
