@@ -47,20 +47,18 @@ const TIER_CONFIG = {
 // Some scoringCriteria strings use "-1: N/A." as an explicit placeholder meaning
 // "no dereliction condition applies here" — that must NOT count as a real
 // dereliction clause, even though the substring "-1:" is technically present.
-// Reads a sub-element's task data safely, regardless of format. Older
-// sessions store a single free-text blob per sub-element; newer ones store
-// an array of discrete {id, text, priority} items so each task can carry
-// its own MoSCoW priority rather than forcing every task in a sub-element
-// to share one. This normalises both into the same shape everywhere tasks
-// are read, so nothing breaks for existing session data.
-function getTaskItems(tasksObj, key) {
-  const raw = tasksObj?.[key];
-  if (!raw) return [];
-  if (typeof raw === 'string') {
-    return raw.trim() ? [{ id: 'legacy', text: raw, priority: '' }] : [];
-  }
-  if (Array.isArray(raw)) return raw;
-  return [];
+// Splits a sub-element's free-text task entry into individual lines, each
+// treated as a discrete task. Strips common bullet/number prefixes so
+// "- fix X" or "1. fix X" and plain "fix X" all produce clean text. This is
+// what lets a single textarea (fast to type into during the assessment)
+// become separately prioritisable items later, without the assessor ever
+// having to click "add task" per item while working through a dimension.
+function parseTaskLines(text) {
+  if (Array.isArray(text)) text = text.map(i => i?.text || '').join('\n'); // safety net for leftover test data in the old per-item format
+  if (!text?.trim()) return [];
+  return text.split(/\r?\n/)
+    .map(line => line.replace(/^[\s]*[-*•]\s*|^[\s]*\d+[.)]\s*/, '').trim())
+    .filter(line => line.length > 0);
 }
 
 function getDerelictionClause(scoringCriteria) {
@@ -371,7 +369,7 @@ const Session = {
     business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{},
+    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{},
     complexity_answers:{}, complexity_recommendation:null,
     companies_house_data:null,
     upgrade_history:[], foundations_credit_recorded:false,
@@ -384,7 +382,7 @@ const Session = {
       business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{},
+      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{},
       complexity_answers:{}, complexity_recommendation:null,
       companies_house_data:null,
       upgrade_history:[], foundations_credit_recorded:false,
@@ -431,32 +429,8 @@ const Session = {
   },
 
   setNotes(dimId, subId, text)    { this.data.notes[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
-  addTaskItem(dimId, subId) {
-    const key = `${dimId}.${subId}`;
-    const items = getTaskItems(this.data.tasks, key);
-    const newItem = { id: 'ti_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), text:'', priority:'' };
-    this.data.tasks[key] = [...items, newItem];
-    this.save();
-    return newItem.id;
-  },
-  updateTaskItemText(dimId, subId, itemId, text) {
-    const key = `${dimId}.${subId}`;
-    const items = getTaskItems(this.data.tasks, key);
-    const item = items.find(i => i.id === itemId);
-    if (item) { item.text = text; this.data.tasks[key] = items; this.save(); }
-  },
-  updateTaskItemPriority(dimId, subId, itemId, priority) {
-    const key = `${dimId}.${subId}`;
-    const items = getTaskItems(this.data.tasks, key);
-    const item = items.find(i => i.id === itemId);
-    if (item) { item.priority = priority; this.data.tasks[key] = items; this.save(); }
-  },
-  removeTaskItem(dimId, subId, itemId) {
-    const key = `${dimId}.${subId}`;
-    const items = getTaskItems(this.data.tasks, key);
-    this.data.tasks[key] = items.filter(i => i.id !== itemId);
-    this.save();
-  },
+  setTasks(dimId, subId, text)    { this.data.tasks[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
+  setTaskLinePriority(lineKey, priority) { if(!this.data.task_line_priorities) this.data.task_line_priorities={}; this.data.task_line_priorities[lineKey]=priority; this.save(); },
   setEvidence(dimId, subId, val)  { this.data.evidence_basis[`${dimId}.${subId}`]=val; this.save(); },
   setEvidenceReviewed(dimId, subId, val) { if(!this.data.evidence_reviewed) this.data.evidence_reviewed={}; this.data.evidence_reviewed[`${dimId}.${subId}`]=val; this.save(); },
   setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
@@ -840,39 +814,6 @@ const UI = {
   toggleRootCauseChallenge(dimId, subId, val) {
     const el = document.getElementById(`rootcause-challenge-${dimId}-${subId}`);
     if (el) el.style.display = val ? 'block' : 'none';
-  },
-
-  _buildTaskItemsHTML(dimId, subId) {
-    const key = `${dimId}.${subId}`;
-    const items = getTaskItems(Session.data.tasks, key);
-    if (!items.length) return `<div class="task-items-empty">No tasks added yet.</div>`;
-    return items.map(item => `
-      <div class="task-item" data-item-id="${item.id}">
-        <textarea placeholder="Describe the action required…"
-          oninput="Session.updateTaskItemText(${dimId},'${subId}','${item.id}',this.value)">${item.text||''}</textarea>
-        <div class="task-item-row">
-          <select onchange="Session.updateTaskItemPriority(${dimId},'${subId}','${item.id}',this.value)">
-            <option value="" ${!item.priority?'selected':''}>— priority not set —</option>
-            <option value="must" ${item.priority==='must'?'selected':''}>Must have</option>
-            <option value="should" ${item.priority==='should'?'selected':''}>Should have</option>
-            <option value="could" ${item.priority==='could'?'selected':''}>Could have</option>
-            <option value="wont" ${item.priority==='wont'?'selected':''}>Won't have right now</option>
-          </select>
-          <button type="button" class="task-item-remove" onclick="UI.removeTaskItem(${dimId},'${subId}','${item.id}')" title="Remove this task">✕</button>
-        </div>
-      </div>`).join('');
-  },
-
-  addTaskItem(dimId, subId) {
-    Session.addTaskItem(dimId, subId);
-    const container = document.getElementById(`task-items-${dimId}-${subId}`);
-    if (container) container.innerHTML = UI._buildTaskItemsHTML(dimId, subId);
-  },
-
-  removeTaskItem(dimId, subId, itemId) {
-    Session.removeTaskItem(dimId, subId, itemId);
-    const container = document.getElementById(`task-items-${dimId}-${subId}`);
-    if (container) container.innerHTML = UI._buildTaskItemsHTML(dimId, subId);
   },
 
   _rootCauseOptionsHTML(excludeKey, selectedVal) {
@@ -1423,7 +1364,7 @@ const App = {
 
       <div class="bottom-bar">
         <button class="btn btn-ghost" onclick="App.showSessionPicker()">← Sessions</button>
-        <button class="btn btn-primary" onclick="App.generateTaskList()">Generate task list</button>
+        <button class="btn btn-primary" onclick="App.showTaskReview()">Review &amp; prioritise tasks</button>
         <button class="btn btn-secondary" style="margin-left:8px" onclick="App.generateReport()">Generate NIBEX report</button>
         <button class="btn btn-ghost" style="margin-left:8px" onclick="App.viewPastReports()">Past reports</button>
       </div>`;
@@ -1512,6 +1453,7 @@ const App = {
     const key = `${dimId}.${sub.id}`;
     const currentScore    = Session.data.scores[key];
     const currentNotes    = Session.data.notes[key]           || '';
+    const currentTasks    = Session.data.tasks[key]           || '';
     const currentEvidence = Session.data.evidence_basis[key]  || '';
     const currentER       = Session.data.evidence_reviewed?.[key] || '';
     const currentRootCause = Session.data.root_causes?.[key] || '';
@@ -1599,10 +1541,9 @@ const App = {
 
           <div class="tasks-section">
             <label class="tasks-label">Tasks to be completed</label>
-            <div class="task-items" id="task-items-${dimId}-${sub.id}">
-              ${UI._buildTaskItemsHTML(dimId, sub.id)}
-            </div>
-            <button type="button" class="btn btn-ghost add-task-btn" onclick="UI.addTaskItem(${dimId},'${sub.id}')">+ Add task</button>
+            <textarea id="tasks-${dimId}-${sub.id}"
+              placeholder="List any actions required — one per line. Each line becomes its own separately prioritisable task at the end-of-assessment review."
+              oninput="Session.setTasks(${dimId},'${sub.id}',this.value)">${currentTasks}</textarea>
           </div>
 
           <div class="field-group root-cause-field">
@@ -1716,8 +1657,8 @@ const App = {
     // kept neutral and diagnostic here, not written as a sales pitch.
     const tasks=[], redFlagTasks=[];
     for (const key of Object.keys(data.tasks || {})) {
-      const items = getTaskItems(data.tasks, key);
-      if (!items.length) continue;
+      const lines = parseTaskLines(data.tasks[key]);
+      if (!lines.length) continue;
       const [dId,sId] = key.split('.');
       const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
       const sub = dim?.subElements.find(s=>s.id===sId);
@@ -1733,13 +1674,13 @@ const App = {
         if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
       }
       // The root cause link and its falsification test apply to the whole
-      // sub-element, so it's shown once, on the first task item from that
+      // sub-element, so it's shown once, on the first task line from that
       // sub-element, rather than repeated on every individual task.
-      items.forEach((item, idx) => {
-        if (!item.text?.trim()) return;
-        const priority = item.priority || 'unset';
+      lines.forEach((text, idx) => {
+        const lineKey = `${key}::${idx}`;
+        const priority = data.task_line_priorities?.[lineKey] || 'unset';
         const showRootCause = idx === 0 && rootCauseLabel;
-        const html = `<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${item.text}${showRootCause ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}${rootCauseChallenge ? `<br><span class="report-task-challenge">Falsification test: ${rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`;
+        const html = `<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${text}${showRootCause ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}${rootCauseChallenge ? `<br><span class="report-task-challenge">Falsification test: ${rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`;
         tasks.push({ html, priority });
       });
     }
@@ -1823,6 +1764,7 @@ const App = {
       tasks: Session.data.tasks,
       root_causes: Session.data.root_causes,
       root_cause_challenges: Session.data.root_cause_challenges,
+      task_line_priorities: Session.data.task_line_priorities,
       dimension_scores: Session.data.dimension_scores,
       nibex_score: Session.data.nibex_score,
       generated_at: new Date().toISOString(),
@@ -1968,11 +1910,92 @@ const App = {
     `;
   },
 
+  showTaskReview() {
+    document.getElementById('app').innerHTML = this._buildTaskReviewHTML();
+  },
+
+  _buildTaskReviewHTML() {
+    const rows = [];
+    for (const key of Object.keys(Session.data.tasks || {})) {
+      const lines = parseTaskLines(Session.data.tasks[key]);
+      if (!lines.length) continue;
+      const [dId, sId] = key.split('.');
+      const dim = DIMENSIONS.find(d => d.id === parseInt(dId));
+      const sub = dim?.subElements.find(s => s.id === sId);
+      if (!sub) continue;
+
+      const rootCauseKey = Session.data.root_causes?.[key];
+      const rootCauseChallenge = Session.data.root_cause_challenges?.[key];
+      let rootCauseLabel = null;
+      if (rootCauseKey) {
+        const [rdId, rsId] = rootCauseKey.split('.');
+        const rDim = DIMENSIONS.find(d => d.id === parseInt(rdId));
+        const rSub = rDim?.subElements.find(s => s.id === rsId);
+        if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
+      }
+
+      lines.forEach((text, idx) => {
+        const lineKey = `${key}::${idx}`;
+        rows.push({
+          lineKey, text,
+          origin: `${dId}.${sId} ${sub.label}`,
+          priority: Session.data.task_line_priorities?.[lineKey] || '',
+          rootCauseLabel: idx === 0 ? rootCauseLabel : null,
+          rootCauseChallenge: idx === 0 ? rootCauseChallenge : null,
+        });
+      });
+    }
+
+    const buckets = [
+      { key:'',       title:'Not yet prioritised' },
+      { key:'must',   title:'Must have' },
+      { key:'should', title:'Should have' },
+      { key:'could',  title:'Could have' },
+      { key:'wont',   title:"Won't have right now" },
+    ];
+
+    const rowHTML = r => `
+      <div class="review-row">
+        <div class="review-row-origin">${r.origin}</div>
+        <div class="review-row-text">${r.text}</div>
+        ${r.rootCauseLabel ? `<div class="review-row-rootcause">↳ Root cause: linked to ${r.rootCauseLabel}${r.rootCauseChallenge ? `<br><span>Falsification test: ${r.rootCauseChallenge}</span>` : ''}</div>` : ''}
+        <select onchange="App.setReviewPriority('${r.lineKey}',this.value)">
+          <option value="" ${!r.priority?'selected':''}>— not set —</option>
+          <option value="must" ${r.priority==='must'?'selected':''}>Must have</option>
+          <option value="should" ${r.priority==='should'?'selected':''}>Should have</option>
+          <option value="could" ${r.priority==='could'?'selected':''}>Could have</option>
+          <option value="wont" ${r.priority==='wont'?'selected':''}>Won't have right now</option>
+        </select>
+      </div>`;
+
+    const groupedHTML = buckets.map(b => {
+      const inBucket = rows.filter(r => r.priority === b.key);
+      if (!inBucket.length) return '';
+      return `<div class="review-bucket"><h3 class="review-bucket-title">${b.title}</h3>${inBucket.map(rowHTML).join('')}</div>`;
+    }).join('');
+
+    return `
+      <div class="review-screen">
+        <div class="review-header">
+          <button class="btn btn-ghost" onclick="App._renderAssessment()">← Back to assessment</button>
+          <h2>Review &amp; prioritise tasks — ${Session.data.business_name}</h2>
+          <p class="review-subtitle">Every task gathered across the assessment, in one place — set priority here, with the full picture in view, rather than while still part-way through scoring.</p>
+        </div>
+        ${rows.length ? groupedHTML : '<p class="review-empty">No tasks recorded yet — add some in the assessment first.</p>'}
+        <button class="btn btn-primary" style="margin-top:20px" onclick="App.generateTaskList()">Generate task list</button>
+      </div>`;
+  },
+
+  setReviewPriority(lineKey, priority) {
+    Session.setTaskLinePriority(lineKey, priority);
+    document.getElementById('app').innerHTML = this._buildTaskReviewHTML();
+  },
+
   generateTaskList() {
     const tasks=[], redFlags=[];
     for (const key of Object.keys(Session.data.tasks || {})) {
-      const items = getTaskItems(Session.data.tasks, key);
-      if (!items.length) continue;
+      const lines = parseTaskLines(Session.data.tasks[key]);
+      if (!lines.length) continue;
       const [dId,sId] = key.split('.');
       const dim = DIMENSIONS.find(d=>d.id===parseInt(dId));
       const sub = dim?.subElements.find(s=>s.id===sId);
@@ -1988,11 +2011,11 @@ const App = {
         const rSub = rDim?.subElements.find(s=>s.id===rsId);
         if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
       }
-      items.forEach((item, idx) => {
-        if (!item.text?.trim()) return;
-        const priority = item.priority || 'unset';
+      lines.forEach((text, idx) => {
+        const lineKey = `${key}::${idx}`;
+        const priority = Session.data.task_line_priorities?.[lineKey] || 'unset';
         const showRootCause = idx === 0 && rootCauseLabel;
-        tasks.push({dimension:dim.label,subElement:sub.label,task:item.text,score,scoreLabel:meta?.label,rootCauseLabel:showRootCause?rootCauseLabel:null,rootCauseChallenge,priority});
+        tasks.push({dimension:dim.label,subElement:sub.label,task:text,score,scoreLabel:meta?.label,rootCauseLabel:showRootCause?rootCauseLabel:null,rootCauseChallenge,priority});
       });
     }
     for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
