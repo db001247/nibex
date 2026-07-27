@@ -1416,3 +1416,14 @@ select {
 .review-row-rootcause span {
   color: var(--ink-muted, #7a7470);
 }
+
+.to-be-field {
+  background: var(--gold-pale, #fdf8ec);
+  border: 1px solid rgba(154,124,46,0.25);
+  border-radius: 6px;
+  padding: 14px;
+  margin: 12px 0 16px;
+}
+.to-be-field textarea {
+  min-height: 60px;
+}

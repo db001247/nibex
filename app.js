@@ -369,7 +369,7 @@ const Session = {
     business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{},
+    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{},
     complexity_answers:{}, complexity_recommendation:null,
     companies_house_data:null,
     upgrade_history:[], foundations_credit_recorded:false,
@@ -382,7 +382,7 @@ const Session = {
       business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{},
+      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{},
       complexity_answers:{}, complexity_recommendation:null,
       companies_house_data:null,
       upgrade_history:[], foundations_credit_recorded:false,
@@ -431,6 +431,7 @@ const Session = {
   setNotes(dimId, subId, text)    { this.data.notes[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
   setTasks(dimId, subId, text)    { this.data.tasks[`${dimId}.${subId}`]=text; this.data.updated_at=new Date().toISOString(); this.save(); },
   setTaskLinePriority(lineKey, priority) { if(!this.data.task_line_priorities) this.data.task_line_priorities={}; this.data.task_line_priorities[lineKey]=priority; this.save(); },
+  setToBeNote(dimId, text) { if(!this.data.to_be_notes) this.data.to_be_notes={}; this.data.to_be_notes[dimId]=text; this.save(); },
   setEvidence(dimId, subId, val)  { this.data.evidence_basis[`${dimId}.${subId}`]=val; this.save(); },
   setEvidenceReviewed(dimId, subId, val) { if(!this.data.evidence_reviewed) this.data.evidence_reviewed={}; this.data.evidence_reviewed[`${dimId}.${subId}`]=val; this.save(); },
   setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
@@ -1396,6 +1397,7 @@ const App = {
   _buildDimensionPanel(dim) {
     if (Session.isRedFlagDim(dim.id)) return this._buildRedFlagPanel(dim);
     const subs = dim.subElements.map(sub => this._buildSubElement(dim.id, sub)).join('');
+    const currentToBeNote = Session.data.to_be_notes?.[dim.id] || '';
     return `
       <div class="dimension-panel" id="dim-panel-${dim.id}">
         <div class="dimension-header">
@@ -1405,6 +1407,12 @@ const App = {
             <div class="progress-bar"><div class="progress-fill" id="progress-fill-${dim.id}" style="width:0%"></div></div>
             <span class="progress-label" id="progress-label-${dim.id}">0 of ${dim.subElements.length} scored</span>
           </div>
+        </div>
+        <div class="to-be-field field-group">
+          <label class="field-label">What would a 5 (Optimised) actually look like here, for this business?</label>
+          <textarea id="tobe-${dim.id}"
+            placeholder="Describe the concrete, specific future state — not the generic scale description, but what it would genuinely look like for this business if this dimension were fully optimised."
+            oninput="Session.setToBeNote(${dim.id},this.value)">${currentToBeNote}</textarea>
         </div>
         ${subs}
       </div>`;
@@ -1659,6 +1667,7 @@ const App = {
         buckets[bucketFor(data.scores[key])].push(sub);
       }
       const ds = data.dimension_scores?.[dim.id];
+      const toBeNote = data.to_be_notes?.[dim.id];
 
       const section = (title, className, subs) => !subs.length ? '' : `
         <div class="report-bucket ${className}">
@@ -1668,6 +1677,7 @@ const App = {
 
       return `<div class="report-dimension">
         <h3>${dim.id}. ${dim.label} ${ds ? `<span class="report-dim-score">${ds.score.toFixed(1)}/5${ds.hasDereliction ? ' — capped (dereliction)' : ''}</span>` : ''}</h3>
+        ${toBeNote ? `<div class="report-to-be"><span class="report-to-be-label">What a 5 would look like here:</span> ${toBeNote}</div>` : ''}
         ${section('Strengths', 'report-bucket-strength', buckets.strength)}
         ${section('Functional', 'report-bucket-functional', buckets.functional)}
         ${section('Areas needing attention', 'report-bucket-attention', buckets.attention)}
@@ -1788,6 +1798,7 @@ const App = {
       root_causes: Session.data.root_causes,
       root_cause_challenges: Session.data.root_cause_challenges,
       task_line_priorities: Session.data.task_line_priorities,
+      to_be_notes: Session.data.to_be_notes,
       dimension_scores: Session.data.dimension_scores,
       nibex_score: Session.data.nibex_score,
       generated_at: new Date().toISOString(),
@@ -1906,6 +1917,8 @@ const App = {
       .report-dimension { margin:24px 0; page-break-inside:avoid; }
       .report-dimension h3 { font-size:18px; display:flex; justify-content:space-between; align-items:baseline; }
       .report-dim-score { font-family:'Montserrat',sans-serif; font-size:13px; color:#9a7c2e; }
+      .report-to-be { font-size:13px; color:#444; background:#fdf8ec; border-left:3px solid #9a7c2e; padding:8px 12px; margin:8px 0 14px; }
+      .report-to-be-label { font-weight:600; color:#7a5f1a; }
       .report-rf-badge { font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; background:#f0e6c8; color:#7a5f1a; padding:2px 8px; border-radius:3px; }
       .report-disclaimer { font-size:13px; color:#666; background:#fdf8ec; border-left:3px solid #9a7c2e; padding:8px 12px; }
       .report-bucket { margin:10px 0; }
