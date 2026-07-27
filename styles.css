@@ -1333,3 +1333,7 @@ select {
   margin-top: 4px;
   line-height: 1.4;
 }
+
+.root-cause-challenge-field textarea {
+  border-color: rgba(154,124,46,0.3);
+}

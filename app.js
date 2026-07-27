@@ -355,7 +355,7 @@ const Session = {
     business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-    ai_suggestions:{}, red_flags:{}, root_causes:{},
+    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{},
     complexity_answers:{}, complexity_recommendation:null,
     companies_house_data:null,
     upgrade_history:[], foundations_credit_recorded:false,
@@ -368,7 +368,7 @@ const Session = {
       business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-      ai_suggestions:{}, red_flags:{}, root_causes:{},
+      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{},
       complexity_answers:{}, complexity_recommendation:null,
       companies_house_data:null,
       upgrade_history:[], foundations_credit_recorded:false,
@@ -420,6 +420,7 @@ const Session = {
   setEvidenceReviewed(dimId, subId, val) { if(!this.data.evidence_reviewed) this.data.evidence_reviewed={}; this.data.evidence_reviewed[`${dimId}.${subId}`]=val; this.save(); },
   setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
   setRootCause(dimId, subId, val) { if(!this.data.root_causes) this.data.root_causes={}; this.data.root_causes[`${dimId}.${subId}`]=val; this.save(); },
+  setRootCauseChallenge(dimId, subId, val) { if(!this.data.root_cause_challenges) this.data.root_cause_challenges={}; this.data.root_cause_challenges[`${dimId}.${subId}`]=val; this.save(); },
 
   setRedFlag(dimId, subId, flagged, notes) {
     if(!this.data.red_flags) this.data.red_flags={};
@@ -793,6 +794,11 @@ const UI = {
     if (!el) return;
     el.className = `sync-indicator sync-${status}`;
     el.innerHTML = status==='online' ? '● Synced' : status==='offline' ? '● Offline' : '↻ Syncing…';
+  },
+
+  toggleRootCauseChallenge(dimId, subId, val) {
+    const el = document.getElementById(`rootcause-challenge-${dimId}-${subId}`);
+    if (el) el.style.display = val ? 'block' : 'none';
   },
 
   _rootCauseOptionsHTML(excludeKey, selectedVal) {
@@ -1436,6 +1442,7 @@ const App = {
     const currentEvidence = Session.data.evidence_basis[key]  || '';
     const currentER       = Session.data.evidence_reviewed?.[key] || '';
     const currentRootCause = Session.data.root_causes?.[key] || '';
+    const currentRootCauseChallenge = Session.data.root_cause_challenges?.[key] || '';
     const tier = Session.data.tier || 'standard';
     const hasDereliction = !!getDerelictionClause(sub.scoringCriteria);
 
@@ -1526,11 +1533,18 @@ const App = {
 
           <div class="field-group root-cause-field">
             <label class="field-label">Root cause (optional)</label>
-            <select id="rootcause-${dimId}-${sub.id}" onchange="Session.setRootCause(${dimId},'${sub.id}',this.value)">
+            <select id="rootcause-${dimId}-${sub.id}" onchange="Session.setRootCause(${dimId},'${sub.id}',this.value); UI.toggleRootCauseChallenge(${dimId},'${sub.id}',this.value);">
               <option value="">— not linked to another sub-element —</option>
               ${UI._rootCauseOptionsHTML(key, currentRootCause)}
             </select>
             <div class="field-hint">If this score is really a symptom of an issue elsewhere (e.g. a documentation gap caused by a culture problem), link it here rather than treating it as unrelated.</div>
+          </div>
+
+          <div class="field-group root-cause-challenge-field" id="rootcause-challenge-${dimId}-${sub.id}" style="display:${currentRootCause?'block':'none'}">
+            <label class="field-label">What would prove this link is wrong?</label>
+            <textarea id="rootcause-challenge-input-${dimId}-${sub.id}"
+              placeholder="Name something that, if true, would mean this isn't really the cause. If you can't think of anything, that's worth noticing — it may mean this is a guess rather than a genuine finding."
+              oninput="Session.setRootCauseChallenge(${dimId},'${sub.id}',this.value)">${currentRootCauseChallenge}</textarea>
           </div>
 
           <div class="evidence-section field-group">
@@ -1634,6 +1648,7 @@ const App = {
       if (!sub) continue;
       const scoreMeta = SCORE_META[data.scores[key]];
       const rootCauseKey = data.root_causes?.[key];
+      const rootCauseChallenge = data.root_cause_challenges?.[key];
       let rootCauseLabel = null;
       if (rootCauseKey) {
         const [rdId,rsId] = rootCauseKey.split('.');
@@ -1641,7 +1656,7 @@ const App = {
         const rSub = rDim?.subElements.find(s=>s.id===rsId);
         if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
       }
-      tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${task}${rootCauseLabel ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}</div>` : ''}</div>`);
+      tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${task}${rootCauseLabel ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}${rootCauseChallenge ? `<br><span class="report-task-challenge">Falsification test: ${rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`);
     }
     for (const [key,rf] of Object.entries(data.red_flags||{})) {
       if (!rf?.flagged) continue;
@@ -1707,6 +1722,7 @@ const App = {
       red_flags: Session.data.red_flags,
       tasks: Session.data.tasks,
       root_causes: Session.data.root_causes,
+      root_cause_challenges: Session.data.root_cause_challenges,
       dimension_scores: Session.data.dimension_scores,
       nibex_score: Session.data.nibex_score,
       generated_at: new Date().toISOString(),
@@ -1841,6 +1857,7 @@ const App = {
       .report-sub-reasoning { font-size:13px; color:#444; margin-top:2px; }
       .report-task { font-size:13px; border:1px solid #e5e2da; border-radius:4px; padding:8px 10px; margin-bottom:6px; }
       .report-task-rootcause { font-size:11px; color:#9a7c2e; margin-top:6px; }
+      .report-task-challenge { color:#7a7470; }
       .report-task-source { display:block; font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; color:#999; margin-bottom:2px; }
       .report-task-flag { border-color:#b23b3b; background:#fef2f2; }
       .report-flag-heading { color:#b23b3b; border-bottom-color:#b23b3b; }
@@ -1861,6 +1878,7 @@ const App = {
       const score = Session.data.scores[key];
       const meta = SCORE_META[score];
       const rootCauseKey = Session.data.root_causes?.[key];
+      const rootCauseChallenge = Session.data.root_cause_challenges?.[key];
       let rootCauseLabel = null;
       if (rootCauseKey) {
         const [rdId,rsId] = rootCauseKey.split('.');
@@ -1868,7 +1886,7 @@ const App = {
         const rSub = rDim?.subElements.find(s=>s.id===rsId);
         if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
       }
-      tasks.push({dimension:dim.label,subElement:sub.label,task,score,scoreLabel:meta?.label,rootCauseLabel});
+      tasks.push({dimension:dim.label,subElement:sub.label,task,score,scoreLabel:meta?.label,rootCauseLabel,rootCauseChallenge});
     }
     for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
       if (!rf?.flagged) continue;
@@ -1884,7 +1902,7 @@ const App = {
       ${tasks.map(t=>`<div style="border:0.5px solid #d4c9b4;padding:12px;margin-bottom:8px;border-radius:4px">
         <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${t.dimension} — ${t.subElement}${t.scoreLabel ? ` · Scored: ${t.scoreLabel}` : ''}</div>
         <div>${t.task}</div>
-        ${t.rootCauseLabel ? `<div style="font-size:11px;color:#9a7c2e;margin-top:6px">↳ Root cause: linked to ${t.rootCauseLabel}</div>` : ''}</div>`).join('')}
+        ${t.rootCauseLabel ? `<div style="font-size:11px;color:#9a7c2e;margin-top:6px">↳ Root cause: linked to ${t.rootCauseLabel}${t.rootCauseChallenge ? `<br><span style="color:#7a7470">Falsification test: ${t.rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`).join('')}
       ${redFlags.length?`<h3 style="font-size:18px;margin:20px 0 12px;color:#b91c1c">Red flags — outside Foundations scope</h3>
         ${redFlags.map(r=>`<div style="border:0.5px solid #b91c1c;padding:12px;margin-bottom:8px;border-radius:4px;background:#fef2f2">
           <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${r.dimension} — ${r.subElement}</div>
