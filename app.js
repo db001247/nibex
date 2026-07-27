@@ -1542,8 +1542,9 @@ const App = {
 
           <div class="field-group root-cause-challenge-field" id="rootcause-challenge-${dimId}-${sub.id}" style="display:${currentRootCause?'block':'none'}">
             <label class="field-label">What would prove this link is wrong?</label>
+            <div class="field-hint">This should be a fact about the business, not about your own knowledge. If your honest answer is "I'm not sure" — that means the link needs testing with the client directly. It doesn't mean the link is wrong, and it doesn't mean you're at fault.</div>
             <textarea id="rootcause-challenge-input-${dimId}-${sub.id}"
-              placeholder="Name something that, if true, would mean this isn't really the cause. If you can't think of anything, that's worth noticing — it may mean this is a guess rather than a genuine finding."
+              placeholder="e.g. 'If the client says pricing was actually raised last quarter, this link doesn't hold.' Not: 'I don't know enough about X' — that's a gap in your own knowledge, not evidence about whether the link is true."
               oninput="Session.setRootCauseChallenge(${dimId},'${sub.id}',this.value)">${currentRootCauseChallenge}</textarea>
           </div>
 
