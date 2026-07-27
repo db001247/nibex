@@ -1750,6 +1750,7 @@ const App = {
         ${section('Areas needing attention', 'report-bucket-attention', buckets.attention)}
         ${section('Pending — insufficient information yet', 'report-bucket-pending', buckets.pending)}
         ${section('Not applicable to this business', 'report-bucket-na', buckets.na)}
+        ${section('Not yet scored', 'report-bucket-unscored', buckets.unscored)}
       </div>`;
     }).join('');
 
@@ -1996,7 +1997,8 @@ const App = {
       .report-bucket-attention .report-bucket-title { color:#b23b3b; }
       .report-bucket-functional .report-bucket-title,
       .report-bucket-pending .report-bucket-title,
-      .report-bucket-na .report-bucket-title { color:#666; }
+      .report-bucket-na .report-bucket-title,
+      .report-bucket-unscored .report-bucket-title { color:#666; }
       .report-sub-row { padding:6px 0; border-bottom:1px solid #eee; }
       .report-sub-header { display:flex; justify-content:space-between; font-size:14px; }
       .report-sub-score { font-family:'Montserrat',sans-serif; font-size:11px; color:#666; }
