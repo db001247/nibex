@@ -811,6 +811,29 @@ const UI = {
     el.innerHTML = status==='online' ? '● Synced' : status==='offline' ? '● Offline' : '↻ Syncing…';
   },
 
+  // Auto-formats the tasks textarea with bullet points as the assessor types,
+  // purely visual — parseTaskLines() already strips leading bullets before
+  // treating each line as a discrete task, so this doesn't change the data,
+  // just makes typing multiple tasks read like a list rather than a wall of
+  // text while entering them.
+  handleTaskInput(dimId, subId, el) {
+    const val = el.value;
+    const pos = el.selectionStart;
+    if (pos > 0 && val[pos-1] === '\n') {
+      const before = val.slice(0, pos-1);
+      const prevLineStart = before.lastIndexOf('\n') + 1;
+      const prevLine = before.slice(prevLineStart).replace(/^•\s*/, '').trim();
+      if (prevLine.length > 0) {
+        el.value = val.slice(0, pos) + '• ' + val.slice(pos);
+        el.selectionStart = el.selectionEnd = pos + 2;
+      }
+    } else if (val.length === 1 && val !== '•') {
+      el.value = '• ' + val;
+      el.selectionStart = el.selectionEnd = el.value.length;
+    }
+    Session.setTasks(dimId, subId, el.value);
+  },
+
   toggleRootCauseChallenge(dimId, subId, val) {
     const el = document.getElementById(`rootcause-challenge-${dimId}-${subId}`);
     if (el) el.style.display = val ? 'block' : 'none';
@@ -1543,7 +1566,7 @@ const App = {
             <label class="tasks-label">Tasks to be completed</label>
             <textarea id="tasks-${dimId}-${sub.id}"
               placeholder="List any actions required — one per line. Each line becomes its own separately prioritisable task at the end-of-assessment review."
-              oninput="Session.setTasks(${dimId},'${sub.id}',this.value)">${currentTasks}</textarea>
+              oninput="UI.handleTaskInput(${dimId},'${sub.id}',this)">${currentTasks}</textarea>
           </div>
 
           <div class="field-group root-cause-field">
