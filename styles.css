@@ -1337,3 +1337,13 @@ select {
 .root-cause-challenge-field textarea {
   border-color: rgba(154,124,46,0.3);
 }
+
+.task-priority-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.task-priority-row .field-label {
+  margin-bottom: 0;
+}

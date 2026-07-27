@@ -355,7 +355,7 @@ const Session = {
     business_name:'', business_type:'', owner_name:'', client_code:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{},
+    ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_priority:{},
     complexity_answers:{}, complexity_recommendation:null,
     companies_house_data:null,
     upgrade_history:[], foundations_credit_recorded:false,
@@ -368,7 +368,7 @@ const Session = {
       business_name:'', business_type:'', owner_name:'', client_code:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
-      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{},
+      ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_priority:{},
       complexity_answers:{}, complexity_recommendation:null,
       companies_house_data:null,
       upgrade_history:[], foundations_credit_recorded:false,
@@ -421,6 +421,7 @@ const Session = {
   setAISuggestion(dimId, subId, s) { this.data.ai_suggestions[`${dimId}.${subId}`]=s; this.save(); },
   setRootCause(dimId, subId, val) { if(!this.data.root_causes) this.data.root_causes={}; this.data.root_causes[`${dimId}.${subId}`]=val; this.save(); },
   setRootCauseChallenge(dimId, subId, val) { if(!this.data.root_cause_challenges) this.data.root_cause_challenges={}; this.data.root_cause_challenges[`${dimId}.${subId}`]=val; this.save(); },
+  setTaskPriority(dimId, subId, val) { if(!this.data.task_priority) this.data.task_priority={}; this.data.task_priority[`${dimId}.${subId}`]=val; this.save(); },
 
   setRedFlag(dimId, subId, flagged, notes) {
     if(!this.data.red_flags) this.data.red_flags={};
@@ -1443,6 +1444,7 @@ const App = {
     const currentER       = Session.data.evidence_reviewed?.[key] || '';
     const currentRootCause = Session.data.root_causes?.[key] || '';
     const currentRootCauseChallenge = Session.data.root_cause_challenges?.[key] || '';
+    const currentTaskPriority = Session.data.task_priority?.[key] || '';
     const tier = Session.data.tier || 'standard';
     const hasDereliction = !!getDerelictionClause(sub.scoringCriteria);
 
@@ -1529,6 +1531,16 @@ const App = {
             <textarea id="tasks-${dimId}-${sub.id}"
               placeholder="List any actions required to address gaps or improve this sub-element…"
               oninput="Session.setTasks(${dimId},'${sub.id}',this.value)">${currentTasks}</textarea>
+            <div class="task-priority-row">
+              <label class="field-label">Priority</label>
+              <select id="taskpriority-${dimId}-${sub.id}" onchange="Session.setTaskPriority(${dimId},'${sub.id}',this.value)">
+                <option value="" ${!currentTaskPriority?'selected':''}>— not set —</option>
+                <option value="must" ${currentTaskPriority==='must'?'selected':''}>Must have</option>
+                <option value="should" ${currentTaskPriority==='should'?'selected':''}>Should have</option>
+                <option value="could" ${currentTaskPriority==='could'?'selected':''}>Could have</option>
+                <option value="wont" ${currentTaskPriority==='wont'?'selected':''}>Won't have right now</option>
+              </select>
+            </div>
           </div>
 
           <div class="field-group root-cause-field">
@@ -1657,7 +1669,9 @@ const App = {
         const rSub = rDim?.subElements.find(s=>s.id===rsId);
         if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
       }
-      tasks.push(`<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${task}${rootCauseLabel ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}${rootCauseChallenge ? `<br><span class="report-task-challenge">Falsification test: ${rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`);
+      const priority = data.task_priority?.[key] || 'unset';
+      const html = `<div class="report-task"><span class="report-task-source">${dim.label} — ${sub.label}${scoreMeta ? ` · Scored: ${scoreMeta.label}` : ''}</span>${task}${rootCauseLabel ? `<div class="report-task-rootcause">↳ Root cause: linked to ${rootCauseLabel}${rootCauseChallenge ? `<br><span class="report-task-challenge">Falsification test: ${rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`;
+      tasks.push({ html, priority });
     }
     for (const [key,rf] of Object.entries(data.red_flags||{})) {
       if (!rf?.flagged) continue;
@@ -1667,6 +1681,21 @@ const App = {
       if (!sub) continue;
       redFlagTasks.push(`<div class="report-task report-task-flag"><span class="report-task-source">${dim.label} — ${sub.label}</span>${rf.notes||'Red flag raised — no further detail recorded.'}</div>`);
     }
+
+    // MoSCoW grouping — unprioritised tasks surface first, deliberately
+    // visible rather than silently sorted to the bottom.
+    const moscowBuckets = [
+      { key:'unset',  title:'Not yet prioritised' },
+      { key:'must',   title:'Must have' },
+      { key:'should', title:'Should have' },
+      { key:'could',  title:'Could have' },
+      { key:'wont',   title:"Won't have right now" },
+    ];
+    const tasksGroupedHTML = moscowBuckets.map(b => {
+      const inBucket = tasks.filter(t => t.priority === b.key);
+      if (!inBucket.length) return '';
+      return `<h3 class="report-moscow-heading">${b.title}</h3>${inBucket.map(t=>t.html).join('')}`;
+    }).join('');
 
     const lockedNotice = data.generated_at
       ? `<div class="report-locked-notice">This is a locked record, generated ${dateStr}. It will not change even if the assessment is later updated — a new report would be generated separately for that.</div>`
@@ -1698,7 +1727,7 @@ const App = {
           ${dimensionSections}
 
           <h2>Task list</h2>
-          ${tasks.length ? tasks.join('') : '<p class="report-muted">No outstanding tasks recorded.</p>'}
+          ${tasks.length ? tasksGroupedHTML : '<p class="report-muted">No outstanding tasks recorded.</p>'}
           ${redFlagTasks.length ? `<h3 class="report-flag-heading">Red flags — outside current scope</h3>${redFlagTasks.join('')}` : ''}
 
           <div class="report-footer">
@@ -1724,6 +1753,7 @@ const App = {
       tasks: Session.data.tasks,
       root_causes: Session.data.root_causes,
       root_cause_challenges: Session.data.root_cause_challenges,
+      task_priority: Session.data.task_priority,
       dimension_scores: Session.data.dimension_scores,
       nibex_score: Session.data.nibex_score,
       generated_at: new Date().toISOString(),
@@ -1859,6 +1889,7 @@ const App = {
       .report-task { font-size:13px; border:1px solid #e5e2da; border-radius:4px; padding:8px 10px; margin-bottom:6px; }
       .report-task-rootcause { font-size:11px; color:#9a7c2e; margin-top:6px; }
       .report-task-challenge { color:#7a7470; }
+      .report-moscow-heading { font-family:'Montserrat',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.06em; color:#9a7c2e; margin:16px 0 8px; border-bottom:1px solid #e5e2da; padding-bottom:4px; }
       .report-task-source { display:block; font-family:'Montserrat',sans-serif; font-size:10px; text-transform:uppercase; color:#999; margin-bottom:2px; }
       .report-task-flag { border-color:#b23b3b; background:#fef2f2; }
       .report-flag-heading { color:#b23b3b; border-bottom-color:#b23b3b; }
@@ -1887,7 +1918,8 @@ const App = {
         const rSub = rDim?.subElements.find(s=>s.id===rsId);
         if (rSub) rootCauseLabel = `${rootCauseKey} ${rSub.label}`;
       }
-      tasks.push({dimension:dim.label,subElement:sub.label,task,score,scoreLabel:meta?.label,rootCauseLabel,rootCauseChallenge});
+      const priority = Session.data.task_priority?.[key] || 'unset';
+      tasks.push({dimension:dim.label,subElement:sub.label,task,score,scoreLabel:meta?.label,rootCauseLabel,rootCauseChallenge,priority});
     }
     for (const [key,rf] of Object.entries(Session.data.red_flags||{})) {
       if (!rf?.flagged) continue;
@@ -1898,12 +1930,31 @@ const App = {
       redFlags.push({dimension:dim.label,subElement:sub.label,notes:rf.notes});
     }
     if (!tasks.length && !redFlags.length) { alert('No tasks or red flags recorded yet.'); return; }
-    const html = `<div style="padding:16px;font-family:Georgia,serif">
-      <h2 style="font-size:22px;margin-bottom:16px">Task list — ${Session.data.business_name}</h2>
-      ${tasks.map(t=>`<div style="border:0.5px solid #d4c9b4;padding:12px;margin-bottom:8px;border-radius:4px">
+
+    const taskCardHTML = t => `<div style="border:0.5px solid #d4c9b4;padding:12px;margin-bottom:8px;border-radius:4px">
         <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${t.dimension} — ${t.subElement}${t.scoreLabel ? ` · Scored: ${t.scoreLabel}` : ''}</div>
         <div>${t.task}</div>
-        ${t.rootCauseLabel ? `<div style="font-size:11px;color:#9a7c2e;margin-top:6px">↳ Root cause: linked to ${t.rootCauseLabel}${t.rootCauseChallenge ? `<br><span style="color:#7a7470">Falsification test: ${t.rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`).join('')}
+        ${t.rootCauseLabel ? `<div style="font-size:11px;color:#9a7c2e;margin-top:6px">↳ Root cause: linked to ${t.rootCauseLabel}${t.rootCauseChallenge ? `<br><span style="color:#7a7470">Falsification test: ${t.rootCauseChallenge}</span>` : ''}</div>` : ''}</div>`;
+
+    // MoSCoW grouping — tasks with no priority set are surfaced first as their
+    // own group, deliberately visible rather than silently sorted to the bottom,
+    // so an assessor notices unprioritised work rather than losing track of it.
+    const buckets = [
+      { key:'unset',  title:'Not yet prioritised' },
+      { key:'must',   title:'Must have' },
+      { key:'should', title:'Should have' },
+      { key:'could',  title:'Could have' },
+      { key:'wont',   title:"Won't have right now" },
+    ];
+    const groupedHTML = buckets.map(b => {
+      const inBucket = tasks.filter(t => t.priority === b.key);
+      if (!inBucket.length) return '';
+      return `<h3 style="font-size:16px;margin:20px 0 10px;color:#0f0e0c">${b.title}</h3>${inBucket.map(taskCardHTML).join('')}`;
+    }).join('');
+
+    const html = `<div style="padding:16px;font-family:Georgia,serif">
+      <h2 style="font-size:22px;margin-bottom:16px">Task list — ${Session.data.business_name}</h2>
+      ${groupedHTML}
       ${redFlags.length?`<h3 style="font-size:18px;margin:20px 0 12px;color:#b91c1c">Red flags — outside Foundations scope</h3>
         ${redFlags.map(r=>`<div style="border:0.5px solid #b91c1c;padding:12px;margin-bottom:8px;border-radius:4px;background:#fef2f2">
           <div style="font-size:10px;text-transform:uppercase;color:#7a7470;margin-bottom:4px">${r.dimension} — ${r.subElement}</div>
