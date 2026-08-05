@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nibex-v1';
+const CACHE_NAME = 'nibex-v2';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -38,18 +38,20 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Static assets — cache first, network fallback
+  // Core app files (HTML/JS/CSS) — network first, cache only as a fallback
+  // for when genuinely offline. This is what "offline-friendly" is supposed
+  // to mean — usable without a connection, not stuck showing an old version
+  // forever even when online. The previous cache-first approach here was
+  // the actual cause of updates repeatedly not appearing after a merge,
+  // on both desktop and mobile.
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(response => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-        }
-        return response;
-      });
-    })
+    fetch(event.request).then(response => {
+      if (response.ok) {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+      }
+      return response;
+    }).catch(() => caches.match(event.request))
   );
 });
 
