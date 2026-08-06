@@ -682,8 +682,20 @@ select {
   background: var(--surface);
   border-top: 0.5px solid var(--rule);
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   z-index: 180;
+}
+
+/* On narrow screens, four buttons can't sit on one line without their text
+   being cut off — let them wrap to two rows instead, each taking roughly
+   half the width, rather than shrinking text until it's unreadable. */
+@media (max-width: 640px) {
+  .bottom-bar .btn {
+    flex: 1 1 calc(50% - 4px);
+    font-size: 12px;
+    padding: 0 8px;
+  }
 }
 
 .btn {
