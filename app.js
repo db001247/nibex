@@ -221,12 +221,20 @@ const SyncEngine = {
 
   async listSessions() {
     if (Connectivity.isOnline && CONFIG.supabaseUrl) {
-      try {
-        const resp = await this._fetch(
-          `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?select=id,data->>business_name,data->>nibex_score,data->>tier,updated_at&order=updated_at.desc`, {}
-        );
-        if (resp.ok) return await resp.json();
-      } catch(e) {}
+      // Try twice before falling back to local storage — a single transient
+      // failure (e.g. right after a fresh sign-in) shouldn't make it look
+      // like sessions have disappeared, especially on a device where local
+      // storage is empty (freshly cleared cache) and has nothing to fall
+      // back to anyway.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const resp = await this._fetch(
+            `${CONFIG.supabaseUrl}/rest/v1/nibex_sessions?select=id,data->>business_name,data->>nibex_score,data->>tier,updated_at&order=updated_at.desc`, {}
+          );
+          if (resp.ok) return await resp.json();
+        } catch(e) {}
+        if (attempt === 0) await new Promise(r => setTimeout(r, 800));
+      }
     }
     return Object.keys(localStorage)
       .filter(k => k.startsWith('nibex_session_'))
@@ -1433,8 +1441,8 @@ const App = {
       <div class="bottom-bar">
         <button class="btn btn-ghost" onclick="App.showSessionPicker()">← Sessions</button>
         <button class="btn btn-primary" onclick="App.showTaskReview()">Review &amp; prioritise tasks</button>
-        <button class="btn btn-secondary" style="margin-left:8px" onclick="App.generateReport()">Generate NIBEX report</button>
-        <button class="btn btn-ghost" style="margin-left:8px" onclick="App.viewPastReports()">Past reports</button>
+        <button class="btn btn-secondary" onclick="App.generateReport()">Generate NIBEX report</button>
+        <button class="btn btn-ghost" onclick="App.viewPastReports()">Past reports</button>
       </div>`;
   },
 
