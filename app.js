@@ -590,6 +590,37 @@ Respond ONLY with JSON: {"score":"-1|0|1|2|3|4|5|na|p","reasoning":"1-2 sentence
       return JSON.parse((d.content?.[0]?.text||'').replace(/```json|```/g,'').trim());
     } catch(e) { console.error('AI scoring failed:',e); return null; }
   },
+
+  // Identifies what the scoring criteria calls for that isn't addressed in
+  // the assessor's notes — a prompt to help spot gaps in what's been asked
+  // or recorded, not a scoring judgement. Purely a suggestion: the result is
+  // displayed for the assessor to read and act on manually, never written
+  // into any field automatically, same discipline as scoring suggestions.
+  async checkGaps(dimId, subId, notes, scoringCriteria) {
+    if (!notes?.trim()) return null;
+
+    let safeNotes = notes;
+    if (Session.data.client_code) {
+      const staffList = await StaffRegistry.list(Session.data.client_code);
+      safeNotes = StaffRegistry.scrub(notes, staffList);
+    }
+
+    const prompt = `You are helping an assessor spot gaps in their notes, not scoring the business.
+SCORING CRITERIA (what a full assessment of this sub-element should cover): ${scoringCriteria}
+ASSESSOR NOTES SO FAR: ${safeNotes}
+List, briefly, what the scoring criteria calls for that these notes don't currently address — specific things worth asking the client about, not a restatement of what's already covered. If the notes already address everything the criteria calls for, say so plainly rather than inventing a gap.
+Respond ONLY with JSON: {"gaps":"1-3 short bullet points as a single string, separated by newlines, or a short note that nothing significant is missing"}`;
+    try {
+      const r = await SyncEngine._fetch(CONFIG.aiEdgeFunction, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!r.ok) throw new Error('API error');
+      const d = await r.json();
+      return JSON.parse((d.content?.[0]?.text||'').replace(/```json|```/g,'').trim());
+    } catch(e) { console.error('Gap check failed:',e); return null; }
+  },
 };
 
 // ── Companies House proxy ──────────────────────────────────────
@@ -1155,6 +1186,44 @@ const UI = {
     const sel = document.getElementById(`evidence-${dimId}-${subId}`);
     if (sel) sel.value = 'AI-assisted — assessor confirmed';
   },
+
+  async requestGapCheck(dimId, subId, btnEl) {
+    const sub = DIMENSIONS.find(d=>d.id===dimId)?.subElements.find(s=>s.id===subId);
+    if (!sub) return;
+    const notes = document.getElementById(`notes-${dimId}-${subId}`)?.value?.trim();
+    if (!notes || notes.length<20) { alert('Add some notes before checking for gaps.'); return; }
+    const loadingEl = document.getElementById(`gap-loading-${dimId}-${subId}`);
+    const resultEl   = document.getElementById(`gap-result-${dimId}-${subId}`);
+    if (loadingEl) loadingEl.classList.add('visible');
+    if (resultEl) resultEl.classList.remove('visible');
+    btnEl.disabled = true;
+    const result = await AIScoring.checkGaps(dimId, subId, notes, sub.scoringCriteria||'');
+    if (loadingEl) loadingEl.classList.remove('visible');
+    btnEl.disabled = false;
+    if (result) {
+      this._lastGapText = this._lastGapText || {};
+      this._lastGapText[`${dimId}.${subId}`] = result.gaps;
+      const gt = document.getElementById(`gap-text-${dimId}-${subId}`);
+      if (gt) gt.textContent = result.gaps;
+      if (resultEl) resultEl.classList.add('visible');
+    } else { alert('Gap check not available right now.'); }
+  },
+
+  // Deliberately not automatic — adds the AI's suggested gaps to the visible
+  // tasks textarea, where the assessor can review, edit, or delete them
+  // before they're saved, same review-before-commit discipline as accepting
+  // an AI score suggestion.
+  addGapsToTasks(dimId, subId) {
+    const gaps = this._lastGapText?.[`${dimId}.${subId}`];
+    if (!gaps) return;
+    const ta = document.getElementById(`tasks-${dimId}-${subId}`);
+    if (!ta) return;
+    const existing = ta.value.trim();
+    const lines = gaps.split('\n').filter(l=>l.trim()).map(l=>l.replace(/^[\s]*[-*•]\s*/, '').trim());
+    const newText = lines.map(l => `• ${l}`).join('\n');
+    ta.value = existing ? `${existing}\n${newText}` : newText;
+    Session.setTasks(dimId, subId, ta.value);
+  },
 };
 
 // ── App router ─────────────────────────────────────────────────
@@ -1615,6 +1684,20 @@ const App = {
                 <button class="ai-accept-btn" onclick="UI.acceptAIScore(${dimId},'${sub.id}')">Accept</button>
               </div>
               <div class="ai-reasoning" id="ai-reasoning-${dimId}-${sub.id}"></div>
+            </div>
+          </div>
+
+          <div class="ai-section gap-check-section">
+            <div class="ai-header">
+              <span class="ai-label">Notes gap check</span>
+              <button class="ai-analyse-btn" onclick="UI.requestGapCheck(${dimId},'${sub.id}',this)">
+                <i class="ti ti-search" style="font-size:14px"></i> Check for gaps
+              </button>
+            </div>
+            <div class="ai-loading" id="gap-loading-${dimId}-${sub.id}">Checking…</div>
+            <div class="ai-suggestion" id="gap-result-${dimId}-${sub.id}">
+              <div class="ai-reasoning" id="gap-text-${dimId}-${sub.id}"></div>
+              <button class="ai-accept-btn" style="margin-top:8px" onclick="UI.addGapsToTasks(${dimId},'${sub.id}')">Add to tasks</button>
             </div>
           </div>
 
