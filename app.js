@@ -616,9 +616,11 @@ Respond ONLY with JSON: {"gaps":"1-3 short bullet points as a single string, sep
         headers: { 'Content-Type':'application/json' },
         body: JSON.stringify({ prompt }),
       });
-      if (!r.ok) throw new Error('API error');
+      if (!r.ok) { console.error('Gap check: edge function returned non-ok status', r.status, await r.text()); return null; }
       const d = await r.json();
-      return JSON.parse((d.content?.[0]?.text||'').replace(/```json|```/g,'').trim());
+      const rawText = d.content?.[0]?.text || '';
+      if (!rawText.trim()) { console.error('Gap check: empty text in response. Full response was:', d); return null; }
+      return JSON.parse(rawText.replace(/```json|```/g,'').trim());
     } catch(e) { console.error('Gap check failed:',e); return null; }
   },
 };
