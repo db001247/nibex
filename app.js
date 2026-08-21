@@ -618,8 +618,18 @@ Respond ONLY with JSON: {"gaps":"1-3 short bullet points as a single string, sep
       });
       if (!r.ok) { console.error('Gap check: edge function returned non-ok status', r.status, await r.text()); return null; }
       const d = await r.json();
-      const rawText = d.content?.[0]?.text || '';
-      if (!rawText.trim()) { console.error('Gap check: empty text in response. Full response was:', d); return null; }
+      // Claude can return more than one content block (e.g. an internal
+      // reasoning step before its actual answer) — find the one that's
+      // actually text, rather than assuming it's always the first block.
+      const textBlock = d.content?.find(b => b.type === 'text');
+      const rawText = textBlock?.text || '';
+      if (!rawText.trim()) {
+        console.error('Gap check: no usable text block found. stop_reason was:', d.stop_reason, '— full content blocks:', d.content);
+        if (d.stop_reason === 'max_tokens') {
+          console.error('Gap check: response was cut off before completing — the edge function\'s token limit is too low for this request.');
+        }
+        return null;
+      }
       return JSON.parse(rawText.replace(/```json|```/g,'').trim());
     } catch(e) { console.error('Gap check failed:',e); return null; }
   },
