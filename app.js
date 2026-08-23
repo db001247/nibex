@@ -1225,7 +1225,7 @@ const UI = {
   // tasks textarea, where the assessor can review, edit, or delete them
   // before they're saved, same review-before-commit discipline as accepting
   // an AI score suggestion.
-  addGapsToTasks(dimId, subId) {
+  addGapsToTasks(dimId, subId, btnEl) {
     const gaps = this._lastGapText?.[`${dimId}.${subId}`];
     if (!gaps) return;
     const ta = document.getElementById(`tasks-${dimId}-${subId}`);
@@ -1235,6 +1235,19 @@ const UI = {
     const newText = lines.map(l => `• ${l}`).join('\n');
     ta.value = existing ? `${existing}\n${newText}` : newText;
     Session.setTasks(dimId, subId, ta.value);
+
+    // Clear, deliberate feedback at the point of interaction — don't rely
+    // on the small background sync indicator, which is too easy to miss.
+    ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    ta.classList.add('tasks-just-updated');
+    setTimeout(() => ta.classList.remove('tasks-just-updated'), 1800);
+
+    if (btnEl) {
+      const original = btnEl.textContent;
+      btnEl.textContent = 'Added ✓';
+      btnEl.disabled = true;
+      setTimeout(() => { btnEl.textContent = original; btnEl.disabled = false; }, 1800);
+    }
   },
 };
 
@@ -1709,7 +1722,7 @@ const App = {
             <div class="ai-loading" id="gap-loading-${dimId}-${sub.id}">Checking…</div>
             <div class="ai-suggestion" id="gap-result-${dimId}-${sub.id}">
               <div class="ai-reasoning" id="gap-text-${dimId}-${sub.id}"></div>
-              <button class="ai-accept-btn" style="margin-top:8px" onclick="UI.addGapsToTasks(${dimId},'${sub.id}')">Add to tasks</button>
+              <button class="ai-accept-btn" style="margin-top:8px" onclick="UI.addGapsToTasks(${dimId},'${sub.id}',this)">Add to tasks</button>
             </div>
           </div>
 
