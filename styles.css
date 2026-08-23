@@ -1464,3 +1464,14 @@ select {
 .process-map-field textarea {
   min-height: 70px;
 }
+
+/* Brief, deliberate highlight when content is added programmatically
+   (e.g. gap-check results added to tasks) - so it's obvious something
+   just happened here, not just a background sync flicker. */
+.tasks-just-updated {
+  animation: taskUpdatedFlash 1.8s ease-out;
+}
+@keyframes taskUpdatedFlash {
+  0%   { background-color: rgba(154,124,46,0.25); border-color: #9a7c2e; }
+  100% { background-color: transparent; }
+}
