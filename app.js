@@ -374,7 +374,7 @@ const SessionTimeout = {
 const Session = {
   id: null,
   data: {
-    business_name:'', business_type:'', owner_name:'', client_code:null,
+    business_name:'', business_type:'', owner_name:'', client_code:null, enquiry_id:null,
     tier:'standard', active_dimensions:[], red_flag_dims:[],
     scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
     ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{}, raci:{}, process_maps:{},
@@ -387,7 +387,7 @@ const Session = {
 
   _defaults() {
     return {
-      business_name:'', business_type:'', owner_name:'', client_code:null,
+      business_name:'', business_type:'', owner_name:'', client_code:null, enquiry_id:null,
       tier:'standard', active_dimensions:[], red_flag_dims:[],
       scores:{}, notes:{}, tasks:{}, evidence_basis:{}, evidence_reviewed:{},
       ai_suggestions:{}, red_flags:{}, root_causes:{}, root_cause_challenges:{}, task_line_priorities:{}, to_be_notes:{}, raci:{}, process_maps:{},
@@ -406,13 +406,15 @@ const Session = {
   // for the "new session sometimes shows the previous session" bug.
   _loadToken: 0,
 
-  new(businessName, tier, complexityAnswers, complexityRec, chData, clientCode) {
+  new(businessName, tier, complexityAnswers, complexityRec, chData, clientCode, ownerName, enquiryId) {
     this._loadToken++;
     const tc = TIER_CONFIG[tier] || TIER_CONFIG.standard;
     this.id = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
     this.data = {
       ...this._defaults(),
       business_name: businessName,
+      owner_name: ownerName || '',
+      enquiry_id: enquiryId || null,
       client_code: clientCode || null,
       tier,
       active_dimensions: tc.allDims,
@@ -697,6 +699,35 @@ const ClientRegistry = {
       console.error('Client creation failed:', created.status, await created.text());
     } catch(e) { console.error('Client creation failed:', e); }
     return null;
+  },
+};
+
+// ── Enquiry registry (contact-form submissions → session autofill) ──
+const EnquiryRegistry = {
+  // Open enquiries = status 'new', most recent first
+  async listOpen() {
+    try {
+      const r = await SyncEngine._fetch(
+        `${CONFIG.supabaseUrl}/rest/v1/nibex_enquiries?status=eq.new&select=id,business,name,email,submitted_at&order=submitted_at.desc`, {}
+      );
+      if (r.ok) return await r.json();
+      console.error('Enquiry list failed:', r.status, await r.text());
+    } catch(e) { console.error('Enquiry list failed:', e); }
+    return [];
+  },
+
+  async markConverted(enquiryId) {
+    if (!enquiryId) return;
+    try {
+      const r = await SyncEngine._fetch(
+        `${CONFIG.supabaseUrl}/rest/v1/nibex_enquiries?id=eq.${enquiryId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type':'application/json' },
+          body: JSON.stringify({ status: 'converted' }),
+        }
+      );
+      if (!r.ok) console.error('Enquiry conversion update failed:', r.status, await r.text());
+    } catch(e) { console.error('Enquiry conversion update failed:', e); }
   },
 };
 
@@ -1293,7 +1324,7 @@ const App = {
 
   // ── New session flow ───────────────────────────────────────────
   startNewSession() {
-    this._flow = { answers:{}, rec:null, chData:null, tier:null };
+    this._flow = { answers:{}, rec:null, chData:null, tier:null, enquiryId:null, openEnquiries:[] };
     document.getElementById('app').innerHTML = this._renderComplexityScreen();
   },
 
@@ -1360,23 +1391,37 @@ const App = {
     document.getElementById('tier-confirm')?.removeAttribute('disabled');
   },
 
-  showBusinessNameEntry() {
+  async showBusinessNameEntry() {
+    this._flow.openEnquiries = await EnquiryRegistry.listOpen();
     document.getElementById('app').innerHTML = this._renderNameEntry();
+  },
+
+  selectEnquiry(enquiryId) {
+    const enq = (this._flow.openEnquiries || []).find(e => String(e.id) === String(enquiryId));
+    this._flow.enquiryId = enq ? enq.id : null;
+    const nameEl = document.getElementById('biz-name');
+    const ownerEl = document.getElementById('biz-owner');
+    if (enq) {
+      if (nameEl) nameEl.value = enq.business || '';
+      if (ownerEl) ownerEl.value = enq.name || '';
+    }
   },
 
   async createSession() {
     const name = document.getElementById('biz-name')?.value?.trim();
     if (!name) { alert('Please enter the business name.'); return; }
+    const ownerName = document.getElementById('biz-owner')?.value?.trim() || '';
     const tier = this._flow.tier || 'standard';
     const clientCode = await ClientRegistry.getOrCreate(name);
     if (!clientCode) {
       alert('Could not set up the client record — check your connection and try again.');
       return;
     }
-    Session.new(name, tier, this._flow.answers, this._flow.rec, this._flow.chData, clientCode);
+    Session.new(name, tier, this._flow.answers, this._flow.rec, this._flow.chData, clientCode, ownerName, this._flow.enquiryId);
     this._renderAssessment();
     // Bug 1 fix: immediately save so new session is in the list
     Session.save();
+    if (this._flow.enquiryId) EnquiryRegistry.markConverted(this._flow.enquiryId);
   },
 
   // ── Upgrade tier ───────────────────────────────────────────────
@@ -2449,6 +2494,15 @@ const App = {
   _renderNameEntry() {
     const tc = TIER_CONFIG[this._flow.tier] || TIER_CONFIG.standard;
     const chName = this._flow.chData?.profile?.company_name || '';
+    const enquiries = this._flow.openEnquiries || [];
+    const enquiryPicker = enquiries.length ? `
+      <div class="field-group">
+        <label class="field-label">Link to an existing enquiry (optional)</label>
+        <select id="enquiry-picker" style="width:100%;padding:10px 12px;font-size:14px;border:0.5px solid var(--rule);background:var(--surface)" onchange="App.selectEnquiry(this.value)">
+          <option value="">— Don't link, enter details manually —</option>
+          ${enquiries.map(e => `<option value="${e.id}">${(e.business||'Unnamed').replace(/"/g,'&quot;')} — ${(e.name||'').replace(/"/g,'&quot;')} (${new Date(e.submitted_at).toLocaleDateString()})</option>`).join('')}
+        </select>
+      </div>` : '';
     return `
       <div class="flow-screen">
         <div class="flow-header">
@@ -2461,10 +2515,17 @@ const App = {
             <span style="font-size:13px;color:var(--ink-muted)">Selected tier</span>
             <strong style="font-size:13px">${tc.label}</strong>
           </div>
+          ${enquiryPicker}
           <div class="field-group">
             <label class="field-label" for="biz-name">Business name</label>
             <input type="text" id="biz-name" value="${chName}"
               placeholder="Enter the trading name of the business…"
+              style="width:100%;padding:10px 12px;font-size:15px;border:0.5px solid var(--rule);background:var(--surface)">
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="biz-owner">Owner / contact name</label>
+            <input type="text" id="biz-owner" value=""
+              placeholder="Enter the business owner's name…"
               style="width:100%;padding:10px 12px;font-size:15px;border:0.5px solid var(--rule);background:var(--surface)">
           </div>
           <button class="btn btn-primary" style="width:100%;margin-top:20px" onclick="App.createSession()">
