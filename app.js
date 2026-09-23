@@ -2048,6 +2048,7 @@ const App = {
 
     // Save the locked snapshot first — if this fails, we don't want to show
     // a report that was never actually recorded anywhere.
+    let reportId = null;
     try {
       const r = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_reports`, {
         method: 'POST',
@@ -2065,6 +2066,8 @@ const App = {
         w?.close();
         return;
       }
+      const rows = await r.json();
+      reportId = rows?.[0]?.id || null;
     } catch(e) {
       alert('Could not save this report as a permanent record — check your connection and try again. No report was generated.');
       w?.close();
@@ -2077,6 +2080,105 @@ const App = {
       w.document.write(html);
       w.document.close();
     }
+
+    // Report opens in its own tab; the main window swaps to the pilot
+    // feedback screen so it's captured while the experience is fresh.
+    if (reportId) this.showPilotFeedback(reportId);
+  },
+
+  // ── Pilot feedback (NECC free assessment pilot) ───────────────────
+  _pfAnswers: {},
+
+  showPilotFeedback(reportId) {
+    document.getElementById('app').innerHTML = this._renderPilotFeedback(reportId);
+  },
+
+  _renderPilotFeedback(reportId) {
+    return `
+      <div class="flow-screen">
+        <div class="flow-header">
+          <div class="flow-title">Quick feedback</div>
+          <div class="flow-step">Your report has been generated</div>
+        </div>
+        <div class="flow-body">
+          <p style="font-size:14px;color:var(--ink-muted);margin-bottom:16px">
+            This only takes a minute and helps us improve NIBEX for other businesses.
+          </p>
+
+          <div class="flow-section-label">How useful did you find this assessment?</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            ${[1,2,3,4,5].map(n => `<button class="btn btn-secondary" onclick="App._pfSelect('usefulness', ${n}, this)">${n}</button>`).join('')}
+          </div>
+
+          <div class="flow-section-label">Did the depth of the assessment feel right for your business?</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            ${['too_basic','about_right','too_much'].map(v => `<button class="btn btn-secondary" onclick="App._pfSelect('depth', '${v}', this)">${v.replace(/_/g,' ')}</button>`).join('')}
+          </div>
+
+          <div class="flow-section-label">Would you have paid for this assessment?</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            ${['yes','no','not_sure'].map(v => `<button class="btn btn-secondary" onclick="App._pfSelect('wouldPay', '${v}', this)">${v.replace(/_/g,' ')}</button>`).join('')}
+          </div>
+
+          <div class="flow-section-label">If yes — roughly what would feel like fair value?</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+            ${['under_50','50_150','150_500','500_plus'].map(v => `<button class="btn btn-secondary" onclick="App._pfSelect('fairValue', '${v}', this)">${v.replace(/_/g,' ')}</button>`).join('')}
+          </div>
+
+          <div class="flow-section-label">Was anything confusing, or did anything take longer than you expected?</div>
+          <textarea id="pf-friction" rows="3" style="width:100%;padding:9px 12px;border:0.5px solid var(--rule);background:var(--surface);font-size:14px;margin-bottom:16px"></textarea>
+
+          <div class="flow-section-label">How likely are you to recommend NIBEX to another business owner? (0–10)</div>
+          <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
+            ${Array.from({length:11},(_,n)=>n).map(n => `<button class="btn btn-secondary" onclick="App._pfSelect('recommend', ${n}, this)">${n}</button>`).join('')}
+          </div>
+
+          <div class="flow-section-label">Anything else you'd like us to know?</div>
+          <textarea id="pf-comments" rows="3" style="width:100%;padding:9px 12px;border:0.5px solid var(--rule);background:var(--surface);font-size:14px;margin-bottom:24px"></textarea>
+
+          <div style="display:flex;gap:12px">
+            <button class="btn btn-primary" onclick="App.submitPilotFeedback('${reportId}')">Submit feedback</button>
+            <button class="btn btn-ghost" onclick="App.showSessionPicker()">Skip</button>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  _pfSelect(field, value, btnEl) {
+    this._pfAnswers[field] = value;
+    const group = btnEl.parentElement;
+    [...group.children].forEach(b => b.classList.remove('btn-primary'));
+    [...group.children].forEach(b => b.classList.add('btn-secondary'));
+    btnEl.classList.remove('btn-secondary');
+    btnEl.classList.add('btn-primary');
+  },
+
+  async submitPilotFeedback(reportId) {
+    const a = this._pfAnswers;
+    try {
+      const r = await SyncEngine._fetch(`${CONFIG.supabaseUrl}/rest/v1/nibex_pilot_feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          report_id: reportId,
+          client_code: Session.data.client_code,
+          usefulness_rating: a.usefulness ?? null,
+          depth_feedback: a.depth ?? null,
+          would_pay: a.wouldPay ?? null,
+          fair_value_band: a.fairValue ?? null,
+          friction_text: document.getElementById('pf-friction')?.value || null,
+          recommend_score: a.recommend ?? null,
+          additional_comments: document.getElementById('pf-comments')?.value || null,
+        }),
+      });
+      if (!r.ok) { alert('Could not save feedback — please try again.'); return; }
+    } catch(e) {
+      alert('Could not save feedback — please try again.');
+      return;
+    }
+    this._pfAnswers = {};
+    alert('Thank you — your feedback has been recorded.');
+    this.showSessionPicker();
   },
 
   // ── Past reports ────────────────────────────────────────────────
